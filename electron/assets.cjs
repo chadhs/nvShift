@@ -10,8 +10,10 @@ const filenameSegments = new Intl.Segmenter(undefined, { granularity: 'grapheme'
 
 /** Retain a readable basename without exceeding portable filename limits. */
 function imageFilenamePrefix(name) {
-  const filename = typeof name === 'string' ? path.basename(name.toWellFormed()).normalize('NFC') : '';
-  const stem = filename.slice(0, filename.length - path.extname(filename).length)
+  // Import callers supply a basename. Keep reserved backslashes in that name
+  // until sanitization rather than treating them as Windows path separators.
+  const filename = typeof name === 'string' ? path.posix.basename(name.toWellFormed()).normalize('NFC') : '';
+  const stem = filename.slice(0, filename.length - path.posix.extname(filename).length)
     .replace(/[<>:"/\\|?*\p{Cc}\p{Zl}\p{Zp}]/gu, '-')
     .replace(/^[.\s]+|[.\s]+$/gu, '');
   let prefix = '', bytes = 0;

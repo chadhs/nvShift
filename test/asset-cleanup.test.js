@@ -11,7 +11,7 @@ import { collectAssetReferences } from '../src/asset-references.js';
 import { insertImageBytes } from '../electron/assets.cjs';
 
 const pixel = await fs.readFile(new URL('../build/icons/16x16.png', import.meta.url));
-async function fixture({ notes = { 'Note.md': '# Notes\nNo images.' }, assets = ['unused.png'], trash } = {}) {
+async function fixture({ notes = { 'Note.md': '# Notes\nNo images.' }, assets = ['unused.png'], trash, beforeOpen } = {}) {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'nvshift-cleanup-')));
   const root = path.join(base, 'notes'), userData = path.join(base, 'profile'), trashed = [];
   await fs.mkdir(path.join(root, 'assets'), { recursive: true });
@@ -21,6 +21,7 @@ async function fixture({ notes = { 'Note.md': '# Notes\nNo images.' }, assets = 
     await fs.writeFile(path.join(root, name), source);
   }
   for (const name of assets) await fs.writeFile(path.join(root, 'assets', name), pixel);
+  await beforeOpen?.({ base, root, userData });
   const library = createLibrary({ userData });
   await library.open(root);
   const events = [], waiters = new Map();
@@ -82,11 +83,12 @@ test('cleanup collector retains shared links, definitions, Unicode, ordinary ima
 });
 
 test('linked notes resolve relative resources from their real folder and share library assets', async () => {
-  const f = await fixture({ assets: ['linked.png', 'unused.png'] });
-  try {
-    const outside = path.join(f.base, 'outside'); await fs.mkdir(outside);
+  const f = await fixture({ assets: ['linked.png', 'unused.png'], beforeOpen: async ({ base, root }) => {
+    const outside = path.join(base, 'outside'); await fs.mkdir(outside);
     await fs.writeFile(path.join(outside, 'External.org'), '[[file:../notes/assets/linked.png]]');
-    await fs.symlink(outside, path.join(f.root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+    await fs.symlink(outside, path.join(root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  } });
+  try {
     assert.deepEqual(candidateNames(await complete(f)), ['unused.png']);
   } finally { await f.close(); }
 });
