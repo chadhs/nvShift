@@ -1,10 +1,10 @@
 {
   "notes": 10000,
   "averageSourceBytes": 2107,
-  "indexingMs": 801.85,
+  "indexingMs": 974.63,
   "searches": 100,
-  "medianMs": 12.95,
-  "p95Ms": 20.8,
+  "medianMs": 13.41,
+  "p95Ms": 21.17,
   "targetMs": 100,
   "passed": true
 }

@@ -18,7 +18,7 @@ document.documentElement.dataset.platform = api.platform;
 $('#app-version').textContent = `v${appVersion}`;
 $('#search-shortcut').textContent = mac ? '⌘ L' : 'Ctrl L';
 
-const defaultSettings = { mode: 'system', light: 'light', dark: 'dark', sansSerifHeadings: false, contentWidth: 'reading', vimMode: false, viewMode: 'editor', defaultExtension: 'md', txtSyntax: 'plain', globalShortcut: 'CommandOrControl+Shift+Space', sidebarWidth: 300, splitRatio: .5 };
+const defaultSettings = { mode: 'system', light: 'light', dark: 'dark', sansSerifHeadings: false, contentWidth: 'reading', filenameHeadings: false, vimMode: false, viewMode: 'editor', defaultExtension: 'md', txtSyntax: 'plain', globalShortcut: 'CommandOrControl+Shift+Space', sidebarWidth: 300, splitRatio: .5 };
 let settings = { ...defaultSettings };
 let library = { root: null, count: 0, indexing: false, errors: [] };
 let current = null;
@@ -37,10 +37,14 @@ let switchingLibrary = false;
 let previewTimer;
 let previewGeneration = 0;
 let previewKey = '';
+let headingTimer;
+let headingGeneration = 0;
+let resolvedHeading = null;
 let pendingFragment = null;
 const drafts = new Map();
 const previewScroll = new Map();
 const documentRenderer = createDocumentRenderer();
+const headingRenderer = createDocumentRenderer();
 const previewFinder = createSearch(() => $('#document'), $('#preview-scroller'), (text) => { $('#preview-search-count').textContent = text; });
 
 function reportError(reason) {
@@ -86,6 +90,8 @@ function applySettings(next) {
   $('#toggle-content-width').textContent = fullWidth ? 'Reading width' : 'Full width';
   $('#toggle-content-width').title = fullWidth ? 'Use reading width' : 'Use full width';
   $('#toggle-content-width').setAttribute('aria-label', $('#toggle-content-width').title);
+  updateHeadingChrome();
+  scheduleHeading(0);
   if (current && settings.viewMode !== 'editor') schedulePreview(0);
   if (current && settings.viewMode !== 'preview') requestAnimationFrame(() => editor.view.requestMeasure());
 }
@@ -143,7 +149,14 @@ function acceptState(state) {
     if (state.document) {
       if (!current || current.id !== state.document.id) activateDocument(state.document);
       else acceptDocument(state.document);
-    } else if (current) clearDocument();
+    } else if (current) {
+      const entry = drafts.get(current.id);
+      if (entry && entry.version > entry.ackVersion) {
+        current = { ...current, status: 'conflict', error: 'The note or linked folder disappeared while you were typing. Your draft is preserved.' };
+        updateDocumentChrome();
+        void mirrorDraft(entry).catch(reportError);
+      } else clearDocument();
+    }
   }
   if (state.error) reportError(state.error);
 }
@@ -165,6 +178,7 @@ function changed(source) {
   entry.error = null;
   current = { ...current, source, status: current.status === 'conflict' ? 'conflict' : 'dirty' };
   updateDocumentChrome();
+  scheduleHeading();
   void mirrorDraft(entry).catch(reportError);
   schedulePreview();
   scheduleSearch();
@@ -208,6 +222,7 @@ function acceptDocument(doc, { fromMirror = false } = {}) {
   if (hasNewerLocal) {
     current = { ...current, ...doc, source: entry.source, status: ['conflict', 'error'].includes(doc.status) ? doc.status : 'dirty' };
     updateDocumentChrome();
+    scheduleHeading();
     return;
   }
   entry.version = Math.max(entry.version, serverVersion);
@@ -220,7 +235,8 @@ function acceptDocument(doc, { fromMirror = false } = {}) {
   current = doc;
   if (changedSource || changedFormat) editor.openDocument(doc);
   updateDocumentChrome();
-  if (changedSource || changedFormat || previewKey !== `${doc.id}:${doc.revision}:${document.documentElement.dataset.theme}`) schedulePreview();
+  scheduleHeading();
+  if (changedSource || changedFormat || previewKey !== previewIdentity(doc)) schedulePreview();
   markActiveResult();
 }
 function activateDocument(doc) {
@@ -254,11 +270,16 @@ function activateDocument(doc) {
     $('#preview-scroller').scrollTop = previewScroll.get(doc.id) ?? 0;
   }
   updateDocumentChrome();
+  scheduleHeading(0);
   markActiveResult();
   schedulePreview(0);
   requestAnimationFrame(() => editor.view.requestMeasure());
 }
 function clearDocument() {
+  clearTimeout(headingTimer);
+  headingGeneration++;
+  headingRenderer.cancel();
+  resolvedHeading = null;
   previewGeneration++;
   documentRenderer.cancel();
   current = null;
@@ -275,7 +296,7 @@ function clearDocument() {
 }
 function updateDocumentChrome() {
   if (!current) return;
-  $('#note-title').textContent = current.title || current.name;
+  updateHeadingChrome();
   const folder = current.relativePath?.split(/[\\/]/).slice(0, -1).join(' / ');
   $('#note-folder').textContent = folder || 'NOTES';
   $('#note-path').textContent = current.name;
@@ -290,6 +311,45 @@ function updateDocumentChrome() {
   const words = current.source.trim() ? current.source.trim().split(/\s+/).length : 0;
   const lines = current.source.split('\n').length;
   $('#note-stats').textContent = `${words.toLocaleString()} words · ${lines.toLocaleString()} ${lines === 1 ? 'line' : 'lines'}`;
+}
+
+// Titles use the current buffer even in Editor view. Filename identity remains
+// main-owned; this cache only controls presentation and never renames a note.
+function headingMatches(doc, includeSource = true) {
+  return resolvedHeading?.id === doc?.id && resolvedHeading?.name === doc?.name
+    && resolvedHeading?.format === doc?.format && (!includeSource || resolvedHeading.source === doc.source);
+}
+function updateHeadingChrome() {
+  if (!current) return;
+  const fallback = current.title || current.name;
+  const title = !settings.filenameHeadings && current.format !== 'plain' && headingMatches(current, false)
+    ? resolvedHeading.title : fallback;
+  $('#note-title').textContent = title;
+  $('#document-title').textContent = title;
+}
+function scheduleHeading(delay = 180) {
+  clearTimeout(headingTimer);
+  const generation = ++headingGeneration;
+  headingRenderer.cancel();
+  if (!current || settings.filenameHeadings || current.format === 'plain' || headingMatches(current)) return;
+  const doc = { ...current };
+  headingTimer = setTimeout(async () => {
+    try {
+      const result = await headingRenderer.render(doc, { titleOnly: true });
+      if (generation !== headingGeneration || current?.id !== doc.id || current?.name !== doc.name
+        || current?.format !== doc.format || current?.source !== doc.source || settings.filenameHeadings) return;
+      resolvedHeading = { id: doc.id, name: doc.name, format: doc.format, source: doc.source, title: result.title };
+      updateHeadingChrome();
+    } catch {
+      // A parser failure cannot prevent writing or leave another note's title.
+      if (generation !== headingGeneration || current?.id !== doc.id) return;
+      resolvedHeading = null;
+      updateHeadingChrome();
+    }
+  }, delay);
+}
+function previewIdentity(doc) {
+  return `${doc.id}:${doc.name}:${doc.format}:${doc.revision}:${document.documentElement.dataset.theme}:${settings.filenameHeadings}`;
 }
 
 function scheduleSearch(delay = 55) {
@@ -427,18 +487,21 @@ async function renderPreview() {
   if (current?.id !== id) return;
   const doc = entry?.snapshot ?? current;
   if (entry && entry.version > entry.ackVersion) { schedulePreview(); return; }
-  const key = `${doc.id}:${doc.revision}:${document.documentElement.dataset.theme}`;
+  const key = previewIdentity(doc);
+  const filenameHeadings = settings.filenameHeadings;
   if (previewKey === key && parsed) return;
   const generation = ++previewGeneration;
   documentRenderer.cancel();
   $('#preview-error').hidden = true;
   try {
-    const result = await documentRenderer.render(doc);
-    if (generation !== previewGeneration || current?.id !== id) return;
+    const result = await documentRenderer.render(doc, { filenameHeadings });
+    if (generation !== previewGeneration || current?.id !== id || current.source !== doc.source
+      || current.name !== doc.name || current.format !== doc.format || settings.filenameHeadings !== filenameHeadings) return;
     const top = $('#preview-scroller').scrollTop;
     parsed = result;
     previewKey = key;
-    $('#document-title').textContent = result.title;
+    if (!filenameHeadings) resolvedHeading = { id: doc.id, name: doc.name, format: doc.format, source: doc.source, title: result.title };
+    updateHeadingChrome();
     $('#subtitle').textContent = result.subtitle || '';
     $('#subtitle').hidden = !result.subtitle;
     showMetadata($('#metadata'), result);
@@ -464,7 +527,8 @@ async function renderPreview() {
       pendingFragment = null;
     }
   } catch (reason) {
-    if (generation !== previewGeneration || current?.id !== id) return;
+    if (generation !== previewGeneration || current?.id !== id || current.source !== doc.source
+      || current.name !== doc.name || current.format !== doc.format || settings.filenameHeadings !== filenameHeadings) return;
     parsed = null;
     previewKey = '';
     $('#content').replaceChildren();

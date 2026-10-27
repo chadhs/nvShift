@@ -185,17 +185,18 @@ function installHandlers() {
     return updated;
   });
   handle('window:theme', (theme) => updateTitlebar(win, theme));
-  handle('asset:bytes', (id, bytes) => {
+  handle('asset:bytes', async (id, bytes) => {
+    const note = await library.assertWritable(id);
     if (!(bytes instanceof Uint8Array) && !Array.isArray(bytes)) throw new Error('Invalid clipboard image.');
     if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new Error('Clipboard images must be no larger than 8 MiB.');
     const image = nativeImage.createFromBuffer(Buffer.from(bytes));
     if (image.isEmpty()) throw new Error('The clipboard image could not be read.');
-    return insertImageBytes(library.snapshot().root, library.get(id), image.toPNG(), 'clipboard.png');
+    return insertImageBytes(library.snapshot().root, note, image.toPNG(), 'clipboard.png');
   });
   handle('asset:paths', async (id, paths) => {
     if (!Array.isArray(paths) || paths.some((file) => !authorizedDrops.has(file) || authorizedDrops.get(file) < Date.now())) throw new Error('Drop the image files into nvShift again.');
     for (const file of paths) authorizedDrops.delete(file);
-    return insertImageFiles(library.snapshot().root, library.get(id), paths);
+    return insertImageFiles(library.snapshot().root, await library.assertWritable(id), paths);
   });
   handle('resource:image', (...args) => resources.image(...args));
   handle('resource:diagram', (...args) => resources.diagram(...args));
@@ -203,8 +204,8 @@ function installHandlers() {
     const resource = await resources.link(id, revision, reference);
     const note = library.get(id);
     const { file, fragment } = resolveDocumentLink(note.path, resource.target);
-    const target = library.getByPath(file);
-    if (!target) throw new Error('That note is outside the selected notes folder or is not available.');
+    const target = await library.resolveIndexedPath(file);
+    if (!target) throw new Error('That note is not reachable from the selected notes folder.');
     return { document: await library.activate(target.id), fragment };
   });
   handle('link:external', async (value) => {

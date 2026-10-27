@@ -5,7 +5,7 @@ const { randomUUID } = require('node:crypto');
 
 const DEFAULTS = Object.freeze({
   mode: 'system', light: 'light', dark: 'dark', sansSerifHeadings: false,
-  contentWidth: 'reading', vimMode: false, viewMode: 'editor',
+  contentWidth: 'reading', filenameHeadings: false, vimMode: false, viewMode: 'editor',
   defaultExtension: 'md', txtSyntax: 'plain',
   globalShortcut: 'CommandOrControl+Shift+Space', sidebarWidth: 300, splitRatio: 0.5,
 });
@@ -22,7 +22,7 @@ function validate(patch) {
   for (const [key, value] of Object.entries(patch)) {
     if (!Object.hasOwn(DEFAULTS, key)) throw new Error(`Unknown setting: ${key}`);
     if (choices[key] && !choices[key].includes(value)) throw new Error(`Invalid setting: ${key}`);
-    if (['sansSerifHeadings', 'vimMode'].includes(key) && typeof value !== 'boolean') throw new Error(`Invalid setting: ${key}`);
+    if (['sansSerifHeadings', 'filenameHeadings', 'vimMode'].includes(key) && typeof value !== 'boolean') throw new Error(`Invalid setting: ${key}`);
     if (key === 'globalShortcut' && (typeof value !== 'string' || value.length > 100 || /[\r\n\0]/.test(value))) throw new Error('Invalid global shortcut.');
     if (key === 'sidebarWidth' && (!Number.isFinite(value) || value < 200 || value > 600)) throw new Error('Invalid sidebar width.');
     if (key === 'splitRatio' && (!Number.isFinite(value) || value < 0.2 || value > 0.8)) throw new Error('Invalid split ratio.');

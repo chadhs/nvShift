@@ -4,14 +4,14 @@ import { renderMarkdown } from '../src/markdown.js';
 import { renderDocument, resolveAnchor } from '../src/documents.js';
 import { documentResource } from '../electron/resource-index.cjs';
 
-test('Markdown promotes only an opening H1 and keeps all headings addressable', () => {
+test('Markdown promotes the first document H1 and keeps all headings addressable', () => {
   const parsed = renderMarkdown('[ref]: https://example.com\n\n# *Hello* 日本語\n\n## Café!\n## Café!\n\n[Top](#hello-日本語) [Second](#café-1)');
   assert.equal(parsed.title, 'Hello 日本語');
   assert.deepEqual(parsed.outline.map((heading) => heading.id), ['document-title', 'md-heading-café', 'md-heading-café-1']);
   assert.doesNotMatch(parsed.html, /<h1|<em>Hello/);
   assert.match(parsed.html, /href="#document-title"/);
   assert.match(parsed.html, /href="#md-heading-café-1"/);
-  assert.equal(renderMarkdown('Paragraph\n\n# Later', 'File').title, 'File');
+  assert.equal(renderMarkdown('Paragraph\n\n# Later', 'File').title, 'Later');
   assert.equal(renderMarkdown('Title\n=====').title, 'Title');
   assert.equal(renderMarkdown('', 'Empty').title, 'Empty');
   assert.equal(renderMarkdown('').words, 0);
@@ -70,7 +70,7 @@ test('both document formats expose the same reading and navigation contract', ()
   for (const [name, source] of [['notes.ORG', '* Hello'], ['notes.MARKDOWN', '## Hello'], ['notes.md', '## Hello']]) {
     const parsed = renderDocument({ name, source });
     for (const field of ['html', 'title', 'subtitle', 'author', 'outline', 'images', 'diagrams', 'links', 'anchors', 'words', 'lines']) assert.ok(Object.hasOwn(parsed, field), field);
-    assert.equal(parsed.title, 'notes');
+    assert.equal(parsed.title, name === 'notes.ORG' ? 'Hello' : 'notes');
     assert.equal(resolveAnchor(parsed, { kind: 'heading', value: 'Hello' }), parsed.outline[0].id);
   }
   assert.throws(() => renderDocument({ name: 'notes.json', source: '' }), /Unsupported/);

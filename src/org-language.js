@@ -16,7 +16,7 @@ export const orgStreamParser = {
       if (stream.match(/^\s*#\+[\w-]+(?:\[\])?:/)) { stream.skipToEnd(); return 'meta'; }
       if (stream.match(/^\s*#(?:\s|$)/)) { stream.skipToEnd(); return 'comment'; }
       if (stream.match(/^\s*:[\w_]+:/)) { stream.skipToEnd(); return 'meta'; }
-      if (stream.match(/^\s*(?:[-+]|\d+[.)])\s+/)) return 'list';
+      if (stream.match(/^(?:[ \t]*(?:[-+]|\d+[.)])|[ \t]+\*)[ \t]+/)) return 'list';
       if (stream.match(/^\s*\|/)) { stream.skipToEnd(); return 'punctuation'; }
       if (stream.match(/^\s*(?:SCHEDULED|DEADLINE|CLOSED):/)) return 'keyword';
     }

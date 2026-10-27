@@ -1,22 +1,25 @@
-#+title: nvShift MVP validation
+#+title: nvShift validation
 
-Checks executed on macOS arm64, 2026-10-26, using Node 24.21.0 and Electron 44.9.3.
+Checks executed on macOS arm64, 2026-10-27, using Node 24.21.0 and Electron 44.9.3.
 All desktop fixtures use temporary notes and an isolated application profile.
+The core feature checks below were executed for 0.1.2; all 170 unit/integration
+tests were rerun successfully for 0.1.4. Branding and package checks for 0.1.3
+and the approved copper-logo version 0.1.4 are recorded separately.
 
 * Executed checks
 | Check | Result | Evidence |
 |-------+--------+----------|
-| Unit/integration suite | Passed | npm test; 116 tests, zero failures |
-| Search benchmark | Passed | 10,000 notes, 2107 average source bytes; 801.85 ms indexing; 12.95 ms median and 20.8 ms p95 search, below 100 ms target |
+| Unit/integration suite | Passed | npm test; 170 tests, zero failures |
+| Search benchmark | Passed | 10,000 notes, 2107 average source bytes; 974.63 ms indexing; 13.41 ms median and 21.17 ms p95 search, below 100 ms target |
 | Renderer/analysis build | Passed | npm run build; Vite renderer, browser workers, and standalone Node analyzer |
-| macOS development smoke | Passed | npm run test:smoke |
+| macOS development smoke | Passed | npm run build; node scripts/smoke.mjs |
 | macOS packaged smoke | Passed | npm run test:package:mac; extracted ZIP executable tested outside the repository |
 | macOS DMG/ZIP identity and signatures | Passed | Ad-hoc codesign verification, mounted DMG inspection, check-package.mjs |
 | JavaScript runtime license inventory | Passed | 215 installed runtime packages; no unidentified or GPL/AGPL/LGPL requirement; DOMPurify Apache-2.0 option selected |
 | Notice reproducibility | Passed | node scripts/notices.mjs --check |
 | Runtime dependency audit | Passed | npm audit --omit=dev; zero reported advisories |
 | Original icons | Passed | SVG source, ICNS, ICO, PNG, and tray assets generated and visually inspected |
-| Source whitespace check | Passed | git diff --cached --check; patch-context whitespace preserved through .gitattributes |
+| Source whitespace check | Passed | git diff --check; patch-context whitespace preserved through .gitattributes |
 
 The raw deterministic search benchmark is recorded in [[file:benchmark.json][benchmark.json]].
 Its p95 result measures the search engine after indexing; it does not include
@@ -40,6 +43,73 @@ Use disk, outside deletion, injected write failures, save races, UTF-8/BOM/EOL
 preservation, path safety, portable filename collisions, and parser/resource limits.
 The system Trash callback is verified through injected test operations; manual
 native Trash behavior remains a platform check.
+
+* Linked-directory and image-prefix scenarios
+- Nineteen library integration cases cover external target editing, rename, Trash
+  callbacks, .txt syntax, alias deduplication, preferred-route changes, nested
+  links, cycles, broken links, hidden physical targets, and live target updates.
+- Link retargeting before and during atomic replacement leaves both target files
+  unchanged. Same-path directory replacement and late renderer edits preserve
+  conflict drafts and prevent reuse of an old edit base for a new file.
+- Actual subprocess restart tests cover unchanged, divergent, and retargeted linked
+  notes. Version-one MVP recovery journals remain readable.
+- Eleven directory-graph cases verify physical identities and full route bindings.
+  Six image cases cover readable stems, Unicode/length limits, reserved characters,
+  duplicate names, clipboard prefixes, old UUID-only assets, and cross-drive URLs.
+- Development and extracted-package Electron smoke exercise external Markdown/Org
+  image previews, linked-note navigation, folder-wide .txt modes, and native image
+  drops preserving the original filename prefix. Assets remain in the library root.
+
+* Content-heading and Org editing scenarios
+- Shared title-only and full-preview worker tests cover explicit metadata,
+  headings after introductory text, inline formatting, Unicode, filename fallback,
+  literal blocks, configured .txt syntax, and filename override.
+- Promoted Markdown and Org headings retain outline navigation, duplicate-anchor
+  numbering, internal links, and Org custom IDs without a repeated body heading.
+- Twelve Org command tests cover bullets, indentation, numbered markers, checkbox
+  reset, empty-item exit, splitting, multiple cursors, read-only/selection fallback,
+  literal blocks, CRLF, undo, syntax switching, and the Vim newline hook.
+- Electron smoke verifies content headings in Editor and Split views, edits and
+  H1 removal, explicit Org TITLE precedence, preserved selection and undo when
+  toggling filename headings, and global preference persistence through restart.
+- A conflict draft verifies that both headings and preview use unsaved text while
+  the disk version remains intact. Org list editing is exercised through real
+  keyboard input with Vim off and on, including :w, undo, and normal-mode Enter.
+  Plain/Markdown/Org .txt Enter behavior retains the file's UTF-8 BOM and CRLF.
+
+The original MVP remains recorded in local commit =b1e2f0d=. Version 0.1.0,
+0.1.1, 0.1.2, and 0.1.3 DMG/ZIP artifacts are retained. No remote,
+tag, or public release was created. The approved 0.1.4 source checkpoint includes
+the linked-directory, image-prefix, content-heading, Org editing, and logo changes.
+
+* Logo refresh, 0.1.3
+The new forest-green Shift-key logo shares MarkupPreview's tile geometry and
+cream document strokes. =npm run icons= regenerates the app PNGs at eight sizes,
+macOS ICNS, Windows ICO, and monochrome tray assets from the editable SVG sources.
+The 512px, 32px, 16px, and Retina tray exports were visually inspected. File-format
+checks confirm the expected ICNS, six-entry ICO, RGBA PNG, and tray dimensions.
+
+=npm run dist:mac= built the 0.1.3 arm64 DMG and ZIP. =npm run test:package:mac=
+passed the full extracted-package Electron smoke, ad-hoc signature verification,
+mounted-DMG checks, application identity, payload, and license-notice checks.
+The packaged ICNS, application PNG, and tray PNG match their generated sources
+byte for byte. SHA-256 checksums were regenerated; older artifacts are retained.
+
+* Approved copper logo, 0.1.4
+The approved copper-orange design is now =assets/icon.svg=, using =#c97d50= to
+=#a95532= and cream =#fff6e8=. The Shift-key shape and monochrome tray mark are
+unchanged. All app icon formats were regenerated with =npm run icons=; the
+1024px PNG matches the approved design export byte for byte.
+
+=npm test= passed all 170 tests. =node scripts/notices.mjs --check= verified the
+same 215 runtime packages, and =git diff --check= passed. The focused static
+review found no blocking issues in title handling, Org list editing, or the
+pending change inventory.
+
+=npm run dist:mac= built the 0.1.4 arm64 DMG and ZIP. =npm run test:package:mac=
+passed the complete extracted-package Electron smoke and DMG signature, identity,
+payload, and license checks. Packaged app and tray icons match the generated
+sources byte for byte. SHA-256 checksums include the new artifacts.
 
 * Pending native checks
 | Platform | Status | Required checks |

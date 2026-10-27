@@ -3,12 +3,14 @@ import { orgImageTarget } from '../electron/org-image-links.mjs';
 
 import { escapeHtml } from './html.js';
 import { analyzeDocument } from './document-analysis.js';
+import { orgHeadingText, resolveDocumentHeading } from './headings.js';
 const ignored = new Set(['stars', 'opening', 'closing', 'link.path', 'list.item.bullet', 'emptyLine', 'table.columnSeparator', 'table.hr']);
 const styles = { bold: 'strong', italic: 'em', underline: 'u', strikeThrough: 's', strikethrough: 's', code: 'code', verbatim: 'code' };
 
-export function renderOrg(source, fallbackTitle = 'Untitled') {
+export function renderOrg(source, fallbackTitle = 'Untitled', options = {}) {
   const analysis = analyzeDocument({ source, format: 'org' });
   const { tree, links, images } = analysis;
+  const { title, promoted } = resolveDocumentHeading(analysis, fallbackTitle, options);
   const anchors = Object.create(null);
   const highlightCode = createCodeHighlighter();
   const outline = [];
@@ -18,7 +20,7 @@ export function renderOrg(source, fallbackTitle = 'Untitled') {
   const used = new Set();
   const nextSuffix = new Map();
   const raw = (node) => source.slice(node.position?.start.offset, node.position?.end.offset);
-  const text = (node) => node.type === 'text' ? node.value : (node.children || []).map(text).join('');
+  const text = orgHeadingText;
   const anchor = (value) => `org-${String(value).trim().toLowerCase().replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-|-$/g, '') || 'section'}`;
   const ids = new WeakMap();
   function index(node) {
@@ -32,11 +34,12 @@ export function renderOrg(source, fallbackTitle = 'Untitled') {
         while (used.has(id)) id = `${base}-${suffix++}`;
         nextSuffix.set(base, suffix);
         used.add(id);
-        ids.set(heading, id);
-        anchors[id] = id;
-        if (node.properties?.custom_id) anchors[node.properties.custom_id] ??= id;
-        anchors[id.slice(4)] = id;
-        outline.push({ id, label, level: heading.level, todo: heading.keyword || '' });
+        const targetId = heading === promoted ? 'document-title' : id;
+        ids.set(heading, targetId);
+        anchors[id] = targetId;
+        if (node.properties?.custom_id) anchors[node.properties.custom_id] ??= targetId;
+        anchors[id.slice(4)] = targetId;
+        outline.push({ id: targetId, label, level: heading.level, todo: heading.keyword || '' });
       }
     }
     const siblings = node.children || [];
@@ -78,6 +81,7 @@ export function renderOrg(source, fallbackTitle = 'Untitled') {
       case 'newline': return '\n';
       case 'paragraph': return `<p>${children(node)}</p>`;
       case 'headline': {
+        if (node === promoted) return '';
         const level = Math.min(node.level + 1, 6);
         return `<h${level} id="${escapeHtml(ids.get(node))}" data-level="${node.level}">${children(node)}</h${level}>`;
       }
@@ -98,7 +102,7 @@ export function renderOrg(source, fallbackTitle = 'Untitled') {
         const value = node.path?.protocol === 'mailto' ? `mailto:${pathValue}` : pathValue;
         const label = children(node) || escapeHtml(value);
         if (node.path?.protocol === 'internal') {
-          const target = value.startsWith('#') ? anchor(value.slice(1)) : outline.find((item) => item.label === value.replace(/^\*/, ''))?.id;
+          const target = value.startsWith('#') ? anchors[anchor(value.slice(1))] : outline.find((item) => item.label === value.replace(/^\*/, ''))?.id;
           return target ? `<a href="#${escapeHtml(target)}">${label}</a>` : `<span class="unresolved" title="Unresolved Org link">${label}</span>`;
         }
         if (/^https?:\/\//i.test(value) || /^mailto:/i.test(value)) return `<a href="${escapeHtml(value)}" rel="noreferrer">${label}</a>`;
@@ -150,7 +154,7 @@ export function renderOrg(source, fallbackTitle = 'Untitled') {
   }
   return {
     html: render(tree), outline, images, diagrams, links, anchors,
-    title: String(tree.properties.title || fallbackTitle),
+    title,
     subtitle: String(tree.properties.subtitle || ''),
     author: String(tree.properties.author || ''),
     date: analysis.metadata.date || String(tree.properties.date || ''),

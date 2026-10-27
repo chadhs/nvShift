@@ -4,7 +4,7 @@ import { PROCESSING_TIMEOUT_MS } from './processing-limits.js';
 export function createDocumentRenderer({ createWorker = () => new Worker(new URL('./render-worker.js', import.meta.url), { type: 'module' }), timeoutMs = PROCESSING_TIMEOUT_MS } = {}) {
   let pending;
   const cancel = () => pending?.(new Error('The document changed'));
-  function render(doc) {
+  function render(doc, { titleOnly = false, filenameHeadings = false } = {}) {
     cancel();
     return new Promise((resolve, reject) => {
       let worker, timer;
@@ -22,7 +22,7 @@ export function createDocumentRenderer({ createWorker = () => new Worker(new URL
         worker.onerror = (event) => { event.preventDefault?.(); finish(new Error(event.message || 'Document processing stopped')); };
         worker.onmessageerror = () => finish(new Error('Document processing returned invalid data'));
         timer = setTimeout(() => finish(new Error('Document exceeded the 15-second processing limit')), timeoutMs);
-        worker.postMessage({ source: doc.source, name: doc.name, format: doc.format });
+        worker.postMessage({ source: doc.source, name: doc.name, format: doc.format, titleOnly, filenameHeadings });
       } catch (error) { finish(error); }
     });
   }

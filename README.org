@@ -17,7 +17,19 @@ npm run dev
 #+end_src
 Choose a notes folder on first launch. nvShift remembers it. Existing files stay
 in place; new notes are created at that folder's root. nvShift searches subfolders
-but excludes hidden directories, =assets=, =node_modules=, and symbolic links.
+but excludes hidden entries, =assets=, =node_modules=, and individual file links.
+
+Directory symlinks and Windows directory junctions are followed, including links
+to folders outside the selected library. Each real note appears once, with its
+route through your library shown in results. Ordinary library paths take
+precedence over linked aliases. Notes reached through links use this library's
+file-format preferences, including its =.txt= syntax setting.
+
+Editing, renaming, and trashing a linked note affect the real file. New notes
+still start in the library root. Links can be nested; cycles do not duplicate
+notes. Broken or inaccessible links appear as library errors. If a link is
+removed or points elsewhere while you are editing, nvShift preserves your draft
+and pauses saving instead of sending the edit to a different file.
 
 To open a particular library from the command line:
 #+begin_src sh
@@ -71,6 +83,19 @@ source mode with wrapping, undo/redo, and document search. Preview follows
 unsaved edits. Markdown and Org use the same bounded rendering implementation as
 MarkupPreview; plain text displays literally.
 
+The heading above the editor and the preview use an explicit document title
+(Markdown YAML/TOML =title= or Org =#+TITLE:=), otherwise the first top-level H1,
+otherwise the filename without its extension. Headings follow unsaved edits,
+including in Editor view. An H1 used as the preview title is shown once; its
+outline entry and links still work. Search results and rename keep using filenames.
+Enable =Always use filename as heading= in Appearance to keep filename headings
+and render all content headings in the preview. Plain-text notes always use filenames.
+
+In Org notes, Enter continues bulleted and numbered lists with the same
+indentation. Checkbox items continue unchecked. Enter on an empty item removes
+its marker to end the list. This also works in Vim Insert mode and in =.txt=
+notes configured as Org; literal source and example blocks keep ordinary newlines.
+
 * Vim mode
 Enable Vim mode in Settings. It starts off. Toggling it preserves text and undo
 history. Normal, Insert, and Visual editing use CodeMirror's Vim extension.
@@ -83,8 +108,15 @@ configuration files are not loaded.
 * Images and diagrams
 Paste an image into the editor or drop supported image files there. Clipboard
 images are saved as PNG; dropped files keep their format. nvShift copies images
-into the library's =assets/= directory using unique filenames and inserts a path
-relative to the note, including notes in subfolders.
+into the library's =assets/= directory using readable, unique filenames. For
+example, =architecture diagram.png= becomes =architecture diagram-<uuid>.png=.
+The original stem is made safe for supported filesystems and limited to 120
+UTF-8 bytes. Repeated imports keep separate full UUIDs. Clipboard captures use
+=clipboard-<uuid>.png=. Existing asset filenames and links are unchanged.
+
+Image references resolve from the real note location, including external linked
+notes. New references use relative paths when possible. Notes and assets on
+different Windows drives use local file URLs.
 
 Markdown syntax inserts an image link, Org inserts an Org file link, and plain
 text inserts the path as text. Deleting a note or removing a link does not delete
@@ -115,6 +147,7 @@ Appearance follows MarkupPreview's options and palettes:
 | Dark theme | Default Dark, Solarized Dark | Default Dark |
 | Preview headings | Original serif, Sans-serif | Original serif |
 | Preview width | Reading, Full width | Reading |
+| Always use filename as heading | Off, On | Off |
 
 Light and dark theme choices persist independently. System mode follows the
 operating system. Colors apply to the title bar, search results, settings,

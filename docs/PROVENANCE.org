@@ -9,3 +9,12 @@ License: BSD-3-Clause. Dependency licenses are retained in THIRD-PARTY-NOTICES.o
 
 The copied code is maintained here independently. nvShift does not depend on a
 sibling checkout. nvAlt inspired the interaction model; its source was not copied.
+
+The nvShift icon uses MarkupPreview's rounded-tile geometry, inset highlight,
+cream strokes, and document-line layout as a shared visual family. nvShift uses
+a lighter copper-orange palette and an original Shift-key arrow, also used for its
+monochrome tray mark. Editable SVG sources are in =assets/=; =npm run icons=
+generates the PNG, ICNS, ICO, and tray exports without fonts.
+The approved palette is =#c97d50= to =#a95532= with =#fff6e8= cream strokes.
+The comparison and design snapshot are retained in =assets/concepts/=; the
+application's source of truth is =assets/icon.svg=.

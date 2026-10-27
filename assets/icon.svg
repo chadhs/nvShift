@@ -1,18 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>nvShift</title>
+  <desc>A Shift-key arrow and note lines in cream on a copper-orange tile, a companion to MarkupPreview.</desc>
   <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#314b40"/>
-      <stop offset="1" stop-color="#192d25"/>
-    </linearGradient>
-    <linearGradient id="arrow" x1="0" y1="0" x2="0" y2="1">
-      <stop stop-color="#edc69a"/>
-      <stop offset="1" stop-color="#d99566"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#c97d50"/>
+      <stop offset="1" stop-color="#a95532"/>
     </linearGradient>
   </defs>
-  <rect x="48" y="48" width="928" height="928" rx="220" fill="url(#background)"/>
-  <path d="M252 244h280l128 128v390a54 54 0 0 1-54 54H252a54 54 0 0 1-54-54V298a54 54 0 0 1 54-54Z" fill="#f5f1e5"/>
-  <path d="M532 244v90a38 38 0 0 0 38 38h90Z" fill="#b8c8b9"/>
-  <path d="M280 460h224M280 542h176M280 624h124" fill="none" stroke="#8da494" stroke-width="32" stroke-linecap="round"/>
-  <path d="M560 744V466H448L672 234l224 232H784v278Z" fill="#14251e" opacity=".22" transform="translate(0 22)"/>
-  <path d="M570 732V454H458L672 232l214 222H774v278Z" fill="url(#arrow)" stroke="#273e32" stroke-width="16" stroke-linejoin="round"/>
+  <rect x="80" y="80" width="864" height="864" rx="196" fill="url(#tile)"/>
+  <rect x="84" y="84" width="856" height="856" rx="192" fill="none" stroke="#ffffff" stroke-opacity=".14" stroke-width="8"/>
+  <g fill="none" stroke="#fff6e8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m350 248-108 118h64v94h88v-94h64Z" stroke-width="40"/>
+    <path d="M548 355h188 M292 566h444 M292 710h324" stroke-width="44"/>
+  </g>
 </svg>

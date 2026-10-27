@@ -9,6 +9,7 @@ import { orgImageTarget } from '../electron/org-image-links.mjs';
 import { orgMetadata, markdownMetadata } from './metadata.js';
 import pathSyntax from '../electron/path-syntax.cjs';
 import { visitTree } from './processing-limits.js';
+import { analyzeHeading } from './headings.js';
 const { isDriveAbsolute, hasScheme } = pathSyntax;
 const { MAX_IMAGE_LINKS } = formats;
 
@@ -110,5 +111,6 @@ export function analyzeDocument({ source, format }) {
     }
     nodes.set(node, indexed);
   });
-  return { tree, images, diagrams, links, definitions, nodes, metadata: org?.metadata ?? markdownMetadata(tree) };
+  const metadata = org?.metadata ?? markdownMetadata(tree);
+  return { tree, images, diagrams, links, definitions, nodes, metadata, heading: analyzeHeading(tree, format, source, metadata) };
 }

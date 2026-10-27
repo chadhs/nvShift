@@ -1,12 +1,16 @@
 import { basicSetup } from 'codemirror';
-import { Compartment, EditorState, Transaction } from '@codemirror/state';
+import { Compartment, EditorState, Prec, Transaction } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { markdown } from '@codemirror/lang-markdown';
 import { openSearchPanel } from '@codemirror/search';
 import { tags } from '@lezer/highlight';
-import { vim, Vim } from '@replit/codemirror-vim';
+import { CodeMirror, vim, Vim } from '@replit/codemirror-vim';
 import { orgLanguage } from './org-language.js';
+import { insertOrgListItem, orgVimNewline } from './org-editing.js';
+
+const defaultVimNewline = CodeMirror.commands.newlineAndIndent;
+CodeMirror.commands.newlineAndIndent = (cm) => orgVimNewline(cm, defaultVimNewline);
 
 const noteHighlight = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--syntax-title)', fontWeight: '650' },
@@ -55,7 +59,9 @@ export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFil
   let format = 'plain';
   let settings = { vimMode: false };
   let applying = false;
-  const languageExtension = (syntax) => syntax === 'org' ? orgLanguage : syntax === 'markdown' ? markdown() : [];
+  const languageExtension = (syntax) => syntax === 'org'
+    ? [orgLanguage, Prec.high(keymap.of([{ key: 'Enter', run: insertOrgListItem }]))]
+    : syntax === 'markdown' ? markdown() : [];
   const state = (source = '') => EditorState.create({ doc: source, extensions: [
     vimMode.of(settings.vimMode ? vim() : []),
     basicSetup,

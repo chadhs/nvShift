@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>nvShift</title>
+  <desc>A Shift-key arrow and note lines in cream on a copper-orange tile, a companion to MarkupPreview.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#c97d50"/>
+      <stop offset="1" stop-color="#a95532"/>
+    </linearGradient>
+  </defs>
+  <rect x="80" y="80" width="864" height="864" rx="196" fill="url(#tile)"/>
+  <rect x="84" y="84" width="856" height="856" rx="192" fill="none" stroke="#ffffff" stroke-opacity=".14" stroke-width="8"/>
+  <g fill="none" stroke="#fff6e8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m350 248-108 118h64v94h88v-94h64Z" stroke-width="40"/>
+    <path d="M548 355h188 M292 566h444 M292 710h324" stroke-width="44"/>
+  </g>
+</svg>

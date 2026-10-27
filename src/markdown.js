@@ -2,14 +2,14 @@ import GithubSlugger from 'github-slugger';
 import { analyzeDocument, plainText, externalUrl, remoteImageUrl } from './document-analysis.js';
 import { escapeHtml as e } from './html.js';
 import { createCodeHighlighter } from './highlight.js';
+import { resolveDocumentHeading } from './headings.js';
 
-export function renderMarkdown(source, fallbackTitle = 'Untitled') {
+export function renderMarkdown(source, fallbackTitle = 'Untitled', options = {}) {
   const analysis = analyzeDocument({ source, format: 'markdown' });
   const { tree, nodes, definitions, images, diagrams, links, metadata } = analysis;
   const slugger = new GithubSlugger(), ids = new WeakMap(), anchors = Object.create(null), outline = [];
   const footnotes = new Map(), references = new Map();
-  const first = tree.children.find((node) => !['definition', 'footnoteDefinition', 'yaml', 'toml'].includes(node.type));
-  const promoted = first?.type === 'heading' && first.depth === 1 && (!metadata.title || plainText(first) === metadata.title) ? first : null;
+  const { title, promoted } = resolveDocumentHeading(analysis, fallbackTitle, options);
   function index(node) {
     if (node.type === 'heading') {
       const label = plainText(node), slug = slugger.slug(label);
@@ -96,7 +96,7 @@ export function renderMarkdown(source, fallbackTitle = 'Untitled') {
   for (const [identifier, reference] of references) notes.push({ reference, body: children(footnotes.get(identifier)) });
   if (notes.length) html += `<section class="footnotes" aria-label="Footnotes"><hr><ol>${notes.map(({ reference, body }) => `<li id="md-footnote-${reference.number}">${body} ${Array.from({ length: reference.count }, (_, i) => `<a href="#md-footnote-ref-${reference.number}-${i + 1}" aria-label="Back to reference ${reference.number}.${i + 1}">↩</a>`).join(' ')}</li>`).join('')}</ol></section>`;
   return { html, outline, images, diagrams, links, anchors,
-    title: metadata.title || (promoted ? plainText(promoted) : fallbackTitle), subtitle: '', author: metadata.author,
+    title, subtitle: '', author: metadata.author,
     date: metadata.date, tags: metadata.tags, draft: metadata.draft, metadataWarning: metadata.warning || '',
     words: source.trim() ? source.trim().split(/\s+/).length : 0, lines: source.split('\n').length };
 }

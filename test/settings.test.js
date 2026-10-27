@@ -11,7 +11,8 @@ test('settings retain independent appearance choices and library-specific syntax
     let settings = await createSettings(directory);
     assert.deepEqual(settings.snapshot(), DEFAULTS);
     await settings.setRoot('/notes/one');
-    await settings.update({ light: 'solarized-light', dark: 'solarized-dark', mode: 'dark', vimMode: true, defaultExtension: 'txt', txtSyntax: 'org' });
+    assert.equal(settings.snapshot().filenameHeadings, false);
+    await settings.update({ light: 'solarized-light', dark: 'solarized-dark', mode: 'dark', vimMode: true, filenameHeadings: true, defaultExtension: 'txt', txtSyntax: 'org' });
     await settings.setRoot('/notes/two');
     assert.equal(settings.snapshot().txtSyntax, 'plain');
     await settings.update({ txtSyntax: 'markdown' });
@@ -23,6 +24,9 @@ test('settings retain independent appearance choices and library-specific syntax
     assert.equal(settings.snapshot().light, 'solarized-light');
     assert.equal(settings.snapshot().dark, 'solarized-dark');
     assert.equal(settings.snapshot().vimMode, true);
+    assert.equal(settings.snapshot('/notes/one').filenameHeadings, true);
+    assert.equal(settings.snapshot('/notes/two').filenameHeadings, true);
+    await assert.rejects(settings.update({ filenameHeadings: 'true' }), /Invalid/);
     await assert.rejects(settings.update({ mode: 'surprise' }), /Invalid/);
     await assert.rejects(settings.update({ lastLibrary: '/unselected' }), /Unknown/);
   } finally { await rm(directory, { recursive: true, force: true }); }

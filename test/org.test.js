@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 
 test('duplicate headings keep stable IDs around existing suffixed headings', () => {
   const result = renderOrg('* Same\n* Same-2\n* Same\n* Same\n* Same-3\n* Same');
-  assert.deepEqual(result.outline.map((heading) => heading.id), ['org-same', 'org-same-2', 'org-same-3', 'org-same-4', 'org-same-3-2', 'org-same-5']);
+  assert.deepEqual(result.outline.map((heading) => heading.id), ['document-title', 'org-same-2', 'org-same-3', 'org-same-4', 'org-same-3-2', 'org-same-5']);
 });
 
 test('many duplicate headings render within a bounded subprocess deadline', () => {
@@ -57,7 +57,8 @@ test('empty files, no headings, Unicode and headings deeper than HTML supports',
   assert.equal(renderOrg('').words, 0);
   assert.equal(renderOrg('Just a paragraph').outline.length, 0);
   const result = renderOrg('* Café 日本語\n******* Deep');
-  assert.equal(result.outline[0].id, 'org-café-日本語');
+  assert.equal(result.outline[0].id, 'document-title');
+  assert.equal(result.anchors['org-café-日本語'], 'document-title');
   assert.match(result.html, /<h6 /);
 });
 
