@@ -9,6 +9,7 @@ const { createLibrary } = require('./library.cjs');
 const { createDiagramRenderer } = require('./diagrams.cjs');
 const { createResources } = require('./resources.cjs');
 const { insertImageBytes, insertImageFiles } = require('./assets.cjs');
+const { createAssetCleanup } = require('./asset-cleanup.cjs');
 const { MAX_IMAGE_BYTES } = require('./images.cjs');
 const { resolveDocumentLink } = require('./links.cjs');
 const { configureGraphics } = require('./graphics.cjs');
@@ -27,7 +28,7 @@ const iconPath = app.isPackaged ? path.join(process.resourcesPath, 'icon.png') :
 const trayDirectory = app.isPackaged ? path.join(process.resourcesPath, 'tray') : path.join(__dirname, '../build');
 const page = path.join(__dirname, '../dist/index.html');
 const pageURL = pathToFileURL(page).href;
-let win, tray, settings, library, resources, diagramRenderer;
+let win, tray, settings, library, resources, diagramRenderer, cleanup;
 let quitting = false, quitReady = false, uiReady = false, hiding = false;
 let shortcut = { accelerator: '', registered: false, error: '' };
 const flushRequests = new Map(), authorizedDrops = new Map();
@@ -79,6 +80,7 @@ async function quit() {
   quitting = true;
   try {
     await flushAll();
+    await cleanup?.dispose?.();
     await library.dispose();
     resources.dispose();
     globalShortcut.unregisterAll();
@@ -185,18 +187,36 @@ function installHandlers() {
     return updated;
   });
   handle('window:theme', (theme) => updateTitlebar(win, theme));
+  handle('asset:cleanup-start', async () => { await flushRenderer(); return cleanup.start(); });
+  handle('asset:cleanup-cancel', (scanId) => cleanup.cancel(scanId));
+  handle('asset:cleanup-thumbnail', async (scanId, id) => {
+    const result = await cleanup.thumbnail(scanId, id);
+    const image = nativeImage.createFromDataURL(result.dataUrl);
+    if (image.isEmpty()) return result;
+    const { width, height } = image.getSize();
+    const scale = Math.min(1, 96 / width, 96 / height);
+    return { dataUrl: image.resize({ width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) }).toDataURL() };
+  });
+  handle('asset:cleanup-trash', async (scanId, ids) => { await flushRenderer(); return cleanup.trash(scanId, ids); });
+  handle('asset:protect-history', (id, source) => cleanup.protectHistory(id, source));
   handle('asset:bytes', async (id, bytes) => {
     const note = await library.assertWritable(id);
     if (!(bytes instanceof Uint8Array) && !Array.isArray(bytes)) throw new Error('Invalid clipboard image.');
     if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new Error('Clipboard images must be no larger than 8 MiB.');
     const image = nativeImage.createFromBuffer(Buffer.from(bytes));
     if (image.isEmpty()) throw new Error('The clipboard image could not be read.');
-    return insertImageBytes(library.snapshot().root, note, image.toPNG(), 'clipboard.png');
+    const root = library.snapshot().root;
+    const finish = cleanup.beginImport(root);
+    try { return await insertImageBytes(root, note, image.toPNG(), 'clipboard.png', { onCreated: (file) => cleanup.protectImport(root, file) }); }
+    finally { finish(); }
   });
   handle('asset:paths', async (id, paths) => {
     if (!Array.isArray(paths) || paths.some((file) => !authorizedDrops.has(file) || authorizedDrops.get(file) < Date.now())) throw new Error('Drop the image files into nvShift again.');
     for (const file of paths) authorizedDrops.delete(file);
-    return insertImageFiles(library.snapshot().root, await library.assertWritable(id), paths);
+    const note = await library.assertWritable(id), root = library.snapshot().root;
+    const finish = cleanup.beginImport(root);
+    try { return await insertImageFiles(root, note, paths, { onCreated: (file) => cleanup.protectImport(root, file) }); }
+    finally { finish(); }
   });
   handle('resource:image', (...args) => resources.image(...args));
   handle('resource:diagram', (...args) => resources.diagram(...args));
@@ -222,6 +242,7 @@ function installMenu() {
     { label: 'File', submenu: [
       { label: 'Search or create note', accelerator: 'CmdOrCtrl+L', click: fire('focus-search') },
       { label: 'Choose notes folder…', accelerator: 'CmdOrCtrl+O', click: fire('choose-library') },
+      { label: 'Find unused assets…', click: fire('asset-cleanup') },
       { label: 'Save note', accelerator: 'CmdOrCtrl+S', click: fire('save') },
       { type: 'separator' }, { label: 'Hide window', accelerator: 'CmdOrCtrl+W', click: () => void hideWindow() },
       ...(process.platform === 'darwin' ? [] : [{ label: 'Settings…', accelerator: 'Ctrl+,', click: fire('settings') }, { label: 'Quit nvShift', accelerator: 'Ctrl+Q', click: () => void quit() }]),
@@ -250,6 +271,8 @@ else {
       onLibrary: (value) => { if (uiReady) win?.webContents.send('library:changed', value); },
       onError: report,
     });
+    cleanup = createAssetCleanup({ library, userData: app.getPath('userData'), trashItem: (file) => shell.trashItem(file),
+      onProgress: (value) => { if (uiReady) win?.webContents.send('asset:cleanup', value); } });
     diagramRenderer = createDiagramRenderer();
     resources = createResources(library, diagramRenderer);
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));

@@ -37,7 +37,7 @@ function insertionText(note, destination, { platform = process.platform } = {}) 
   return target;
 }
 /** Copy only verified image bytes into the selected library's own assets directory. */
-async function insertImageBytes(root, note, value, name = null) {
+async function insertImageBytes(root, note, value, name = null, { onCreated = () => {} } = {}) {
   if (!root || !note) throw new Error('Open a note before inserting an image.');
   if (!(value instanceof Uint8Array) && !Array.isArray(value)) throw new Error('Invalid image data.');
   if (!value.length || value.length > MAX_IMAGE_BYTES) throw new Error('Images must be no larger than 8 MiB.');
@@ -51,10 +51,13 @@ async function insertImageBytes(root, note, value, name = null) {
   const resolved = await fs.realpath(directory);
   if (resolved !== path.join(await fs.realpath(root), 'assets')) throw new Error('The assets folder must remain inside your notes folder.');
   const destination = path.join(directory, `${imageFilenamePrefix(name)}-${randomUUID()}${extensions[mime]}`);
+  // Register the destination before it exists, so cleanup cannot race the
+  // interval between the exclusive write and inserting its editor reference.
+  onCreated(destination);
   await fs.writeFile(destination, bytes, { flag: 'wx' });
   return { text: insertionText(note, destination) };
 }
-async function insertImageFiles(root, note, files) {
+async function insertImageFiles(root, note, files, options) {
   if (!Array.isArray(files) || !files.length || files.length > 20 || files.some((file) => typeof file !== 'string')) throw new Error('Drop between one and twenty image files.');
   const texts = [];
   for (const file of files) {
@@ -70,7 +73,7 @@ async function insertImageFiles(root, note, files) {
         total += bytesRead;
       }
       if (total > MAX_IMAGE_BYTES || total > stat.size) throw new Error('The image changed while it was being copied. Try again.');
-      texts.push((await insertImageBytes(root, note, bytes.subarray(0, total), path.basename(file))).text);
+      texts.push((await insertImageBytes(root, note, bytes.subarray(0, total), path.basename(file), options)).text);
     } finally { await handle.close(); }
   }
   return { text: texts.join('\n') };

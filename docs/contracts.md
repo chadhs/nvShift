@@ -20,6 +20,11 @@ This internal contract coordinates the MVP implementation. All note operations u
 - `updateSettings(patch)` -> settings. Library fields are applied to the active library.
 - `insertImage(id, bytes, name)` -> `{text}`; bytes are a Uint8Array or number array.
 - `insertImagePaths(id, paths)` -> `{text}` for native dropped image paths.
+- `startAssetCleanup()` -> `{scanId}`; progress/results arrive through `onAssetCleanup(callback)`.
+- `cancelAssetCleanup(scanId)` cancels that scan without removing files.
+- `assetCleanupThumbnail(scanId, assetId)` -> `{dataUrl}` for an opaque candidate from the current review.
+- `trashUnusedAssets(scanId, assetIds)` -> `{removed,failed}` after revalidation and OS Trash operations.
+- `protectAssetHistory(id, previousSource)` retains the note's previous editor source for session Undo protection.
 - `droppedPath(file)` -> a path for a user-dropped File using Electron webUtils.
 - `image(id, revision, reference)` -> `{dataUrl}` or `{error}`.
 - `diagram(id, revision, reference, theme)` -> `{svg}` or `{error}`.
@@ -31,6 +36,14 @@ This internal contract coordinates the MVP implementation. All note operations u
 Settings are flat for the renderer: `{mode,light,dark,sansSerifHeadings,contentWidth,filenameHeadings,vimMode,viewMode,defaultExtension,txtSyntax,globalShortcut,sidebarWidth,splitRatio}`. Defaults: system/light/dark/false/reading/false/false/editor/md/plain/CommandOrControl+Shift+Space/300/0.5. Store library-specific `defaultExtension` and `txtSyntax` separately on disk. `filenameHeadings` is a global presentation preference and must be a boolean.
 
 Library state is `{root,count,indexing,errors}`; errors is an array of user-readable strings. Shortcut state is `{accelerator,registered,error}`.
+
+Search Up/Down displays the highlighted existing note through `open(id)` while
+retaining focus in the search input and retaining the current view. Enter and
+result clicks use the normal edit-and-focus behavior. Arrow requests coalesce
+and share the navigation/save queue; a superseded in-flight open restores the
+displayed note's main-process selection before newer navigation runs. Query
+changes, focus changes, and explicit navigation invalidate pending browse work.
+Highlighting Create never invokes `create()`.
 
 A document is `{id,path,name,title,relativePath,extension,format,source,revision,clientVersion,diskFingerprint,status,modified,error?}`. `format` is `plain`, `markdown`, or `org`; extension excludes the dot. Status is `saved`, `saving`, `dirty`, `conflict`, or `error`. `revision` is a server buffer revision used for resource validation, independent of disk fingerprint and clientVersion. `source` uses LF internally; preserve original BOM/EOL on disk. A source change event from outside the editor must not replace newer local edits.
 
@@ -71,3 +84,24 @@ and directory identity. Version 1 journals remain readable. Link removal or
 retargeting never rebinds a pending buffer to a different target. A bounded
 retired-record cache retains location history so renderer updates arriving just
 after a clean note disappears can still be preserved as conflict drafts.
+
+## Asset cleanup
+
+Cleanup scans regular image files directly inside the selected library's own
+assets directory. A separate bounded Node worker collects references without
+preview image-count limits. Fresh disk text, main-owned buffers, active recovery
+drafts, and per-session Undo/import pins protect candidates; archive-only
+references classify a candidate as `backup`, otherwise it is `unused`.
+
+`onAssetCleanup` receives `{scanId,status,done,total,candidates,protectedCount,errors}`.
+Status is `scanning`, `complete`, `cancelled`, or `error`; candidates expose only
+`{id,name,size,category}`. All filesystem paths and scan capabilities remain
+main-owned. Incomplete scans never authorize removal. Trash rechecks the library,
+references, recovery data, and file identities and reports per-item failures.
+
+The editor sends every pre-change source to history protection before its
+coalesced buffer update. History writes are drained before scanning or switching
+libraries; protection survives folder switches until the process restarts.
+Imports register their destination before the exclusive write so the image is
+protected before its inserted link reaches the buffer. Cleanup thumbnails are
+bounded in size/concurrency and unloaded outside the review viewport.

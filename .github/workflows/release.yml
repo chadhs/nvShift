@@ -1,0 +1,80 @@
+name: Release a minor version
+on:
+  push:
+    branches: [main]
+  # This merged-only fallback is not suppressed by skip markers in squash messages.
+  # Never check out or execute an unmerged PR head in this workflow.
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+# Keep all pending merges instead of replacing the previous pending run.
+concurrency:
+  group: nvshift-main-releases
+  cancel-in-progress: false
+  # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+  queue: max
+permissions:
+  contents: read
+jobs:
+  plan:
+    if: vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' && (github.event_name != 'pull_request_target' || github.event.pull_request.merged == true)
+    timeout-minutes: 5
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      source: ${{ steps.plan.outputs.source }}
+      published: ${{ steps.plan.outputs.published }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASES_ENABLED: ${{ vars.RELEASES_ENABLED }}
+          RELEASE_SOURCE: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          RELEASE_PR_MERGED: ${{ github.event.pull_request.merged || false }}
+          RELEASE_PR_BASE: ${{ github.event.pull_request.base.ref || '' }}
+        run: node scripts/release.mjs plan
+  build:
+    needs: plan
+    if: needs.plan.outputs.published != 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+      source: ${{ needs.plan.outputs.source }}
+  publish:
+    needs: [plan, build]
+    if: vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' && needs.plan.outputs.published != 'true' && (github.event_name != 'pull_request_target' || github.event.pull_request.merged == true)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.source }}
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: nvshift-*
+          merge-multiple: true
+          path: release
+      - name: Verify packages, tag the versioned source, and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASES_ENABLED: ${{ vars.RELEASES_ENABLED }}
+          RELEASE_SOURCE: ${{ needs.plan.outputs.source }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+          RELEASE_PR_MERGED: ${{ github.event.pull_request.merged || false }}
+          RELEASE_PR_BASE: ${{ github.event.pull_request.base.ref || '' }}
+        run: node scripts/release.mjs publish

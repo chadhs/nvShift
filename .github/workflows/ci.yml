@@ -1,0 +1,14 @@
+name: Desktop checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    # Bootstrap main pushes validate without publishing. Enabled main releases
+    # run these same checks through release.yml instead of building twice.
+    if: github.event_name != 'push' || vars.RELEASES_ENABLED != 'true'
+    uses: ./.github/workflows/build.yml

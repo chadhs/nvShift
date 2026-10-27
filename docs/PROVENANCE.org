@@ -18,3 +18,8 @@ generates the PNG, ICNS, ICO, and tray exports without fonts.
 The approved palette is =#c97d50= to =#a95532= with =#fff6e8= cream strokes.
 The comparison and design snapshot are retained in =assets/concepts/=; the
 application's source of truth is =assets/icon.svg=.
+
+The reusable build/release workflows, release helpers, and their tests are also
+adapted from the same BSD-3-Clause MarkupPreview checkout. nvShift retains its
+own package layout, application dependencies, artifact names, source marker,
+installation instructions, and release notes.

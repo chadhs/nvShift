@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('nvShift', {
   save: invoke('note:save'), rename: invoke('note:rename'), trash: invoke('note:trash'),
   resolveConflict: invoke('note:conflict'), updateSettings: invoke('settings:update'),
   insertImage: invoke('asset:bytes'), insertImagePaths: invoke('asset:paths'),
+  startAssetCleanup: invoke('asset:cleanup-start'), cancelAssetCleanup: invoke('asset:cleanup-cancel'),
+  assetCleanupThumbnail: invoke('asset:cleanup-thumbnail'), trashUnusedAssets: invoke('asset:cleanup-trash'),
+  protectAssetHistory: invoke('asset:protect-history'), onAssetCleanup: subscribe('asset:cleanup'),
   droppedPath(file) {
     const filePath = webUtils.getPathForFile(file);
     if (filePath) ipcRenderer.send('asset:authorize-drop', filePath);

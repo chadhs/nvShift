@@ -50,7 +50,7 @@ const editorTheme = EditorView.theme({
 });
 
 /** Keep each note's CodeMirror state, including selection and undo history, across switches. */
-export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFiles, onError = () => {} }) {
+export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFiles, onHistory = () => {}, onError = () => {} }) {
   const language = new Compartment();
   const vimMode = new Compartment();
   const editable = new Compartment();
@@ -74,7 +74,10 @@ export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFil
     EditorView.contentAttributes.of({ 'aria-label': 'Note contents', spellcheck: 'false' }),
     EditorView.updateListener.of((update) => {
       if (currentId) states.set(currentId, update.state);
-      if (update.docChanged && !applying && currentId) onChange(update.state.doc.toString());
+      if (update.docChanged && !applying && currentId) {
+        onHistory(currentId, update.startState.doc.toString());
+        onChange(update.state.doc.toString());
+      }
     }),
     EditorView.domEventHandlers({
       paste(event) {

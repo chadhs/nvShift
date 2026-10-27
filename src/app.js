@@ -8,6 +8,7 @@ import { loadDiagrams } from './diagrams.js';
 import { showMetadata } from './metadata.js';
 import { resolveAnchor } from './anchors.js';
 import { createSearch } from './search.js';
+import { createAssetCleanupUI } from './asset-cleanup-ui.js';
 import './style.css';
 
 const api = window.nvShift;
@@ -29,6 +30,9 @@ let selected = -1;
 let querySequence = 0;
 let lastSearchQuery = null;
 let queryTimer;
+let resultBrowseTimer;
+let resultBrowseVersion = 0;
+let resultMoveVersion = 0;
 let navigationQueue = Promise.resolve();
 let settingsQueue = Promise.resolve();
 let settingsVersion = 0;
@@ -43,6 +47,8 @@ let resolvedHeading = null;
 let pendingFragment = null;
 const drafts = new Map();
 const previewScroll = new Map();
+const historyWrites = new Set();
+let historyError = null;
 const documentRenderer = createDocumentRenderer();
 const headingRenderer = createDocumentRenderer();
 const previewFinder = createSearch(() => $('#document'), $('#preview-scroller'), (text) => { $('#preview-search-count').textContent = text; });
@@ -60,10 +66,24 @@ const appearance = createAppearance({
 });
 const editor = createNoteEditor($('#editor'), {
   onChange: changed,
+  onHistory: (id, source) => {
+    const operation = api.protectAssetHistory(id, source).catch((error) => { historyError = error; }).finally(() => historyWrites.delete(operation));
+    historyWrites.add(operation);
+  },
   onSave: () => run(saveCurrent()),
   onImage: (bytes, name, id) => run(insertImage(bytes, name, id)),
   onImageFiles: (files, id) => run(insertDroppedImages(files, id)),
   onError: reportError,
+});
+const assetCleanup = createAssetCleanupUI({
+  api, onError: reportError,
+  beforeScan: async () => {
+    cancelSearchNavigation();
+    await navigationQueue.catch(() => {});
+    await flushDrafts();
+    if (!library.root) throw new Error('Choose a notes folder first.');
+    if (historyError) throw new Error(`Undo protection could not be recorded. Restart nvShift before cleaning assets. ${historyError.message}`);
+  },
 });
 
 function applySettings(next) {
@@ -208,6 +228,7 @@ async function mirrorDraft(entry) {
 }
 async function flushDrafts() {
   await settingsQueue.catch(() => {});
+  await Promise.all([...historyWrites]);
   await Promise.all([...drafts.values()].filter((entry) => entry.ackVersion < entry.version || entry.sending).map(async (entry) => {
     await mirrorDraft(entry);
     if (entry.ackVersion < entry.version) await mirrorDraft(entry);
@@ -426,6 +447,50 @@ function selectResult(index) {
   for (const [position, button] of $$('#results .result-item').entries()) button.setAttribute('aria-selected', String(position === selected));
   $('#library-search').setAttribute('aria-activedescendant', `result-${selected}`);
   $(`#result-${selected}`)?.scrollIntoView({ block: 'nearest' });
+  browseResult(rows[selected]);
+}
+function cancelResultBrowse() {
+  clearTimeout(resultBrowseTimer);
+  resultBrowseVersion++;
+}
+function cancelSearchNavigation() {
+  resultMoveVersion++;
+  cancelResultBrowse();
+}
+async function moveResult(direction) {
+  const version = ++resultMoveVersion;
+  const query = $('#library-search').value;
+  if (lastSearchQuery !== query) {
+    clearTimeout(queryTimer);
+    await searchLibrary();
+  }
+  if (version !== resultMoveVersion || query !== $('#library-search').value
+    || lastSearchQuery !== query || document.activeElement !== $('#library-search')) return;
+  const next = selected < 0 ? (direction > 0 ? 0 : rows.length - 1) : selected + direction;
+  selectResult(next);
+}
+function browseResult(result) {
+  cancelResultBrowse();
+  if (!result || result.create) return;
+  const version = resultBrowseVersion;
+  const query = $('#library-search').value;
+  const root = library.root;
+  const isCurrent = () => version === resultBrowseVersion && library.root === root
+    && query === $('#library-search').value && rows[selected]?.id === result.id
+    && document.activeElement === $('#library-search');
+  // Coalesce held arrow keys. Browsing uses the same save queue as opening a
+  // note, but keeps the current view and never moves focus out of search.
+  resultBrowseTimer = setTimeout(() => run(navigate(async () => {
+    if (!isCurrent()) return;
+    const doc = await api.open(result.id);
+    if (isCurrent()) activateDocument(doc);
+    else if (current) {
+      // A blur, edited query, or newer navigation can supersede an IPC open.
+      // Restore main-process selection to the note still displayed; a queued
+      // Enter or newer arrow request will then open its own target normally.
+      await api.open(current.id);
+    }
+  })), 60);
 }
 function navigate(operation) {
   const next = navigationQueue.catch(() => {}).then(async () => { await flushDrafts(); return operation(); });
@@ -433,6 +498,7 @@ function navigate(operation) {
   return next;
 }
 async function chooseResult(result) {
+  cancelSearchNavigation();
   return navigate(async () => {
     clearMessage();
     const doc = result.create ? await api.create(result.title, $('#create-extension').value) : await api.open(result.id);
@@ -448,6 +514,7 @@ async function createFromSearch() {
   return chooseResult({ create: true, title });
 }
 async function chooseLibrary() {
+  cancelSearchNavigation();
   await navigate(async () => {
     if (current) previewScroll.set(current.id, $('#preview-scroller').scrollTop);
     switchingLibrary = true;
@@ -465,7 +532,7 @@ async function chooseLibrary() {
     }
   });
 }
-function focusSearch() { $('#library-search').focus(); $('#library-search').select(); }
+function focusSearch() { cancelSearchNavigation(); $('#library-search').focus(); $('#library-search').select(); }
 async function saveCurrent() {
   if (!current) return;
   const id = current.id;
@@ -575,11 +642,13 @@ function closeSettings() { $('#settings-dialog').close(); }
 $('#dismiss-message').addEventListener('click', clearMessage);
 $('#choose-library').addEventListener('click', () => run(chooseLibrary()));
 $('#welcome-choose').addEventListener('click', () => library.root ? focusSearch() : run(chooseLibrary()));
-$('#library-search').addEventListener('input', () => { querySequence++; selected = -1; scheduleSearch(); });
+$('#library-search').addEventListener('input', () => { cancelSearchNavigation(); querySequence++; selected = -1; scheduleSearch(); });
+$('#library-search').addEventListener('blur', cancelSearchNavigation);
 $('#library-search').addEventListener('keydown', (event) => {
-  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); selectResult(selected + (event.key === 'ArrowDown' ? 1 : -1)); }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); run(moveResult(event.key === 'ArrowDown' ? 1 : -1)); }
   if (event.key === 'Enter') {
     event.preventDefault();
+    cancelSearchNavigation();
     const directCreate = event.metaKey || event.ctrlKey;
     run((async () => {
       if (directCreate) return createFromSearch();
@@ -656,6 +725,7 @@ function commandAction(event) {
   if (command === 'focus-search') focusSearch();
   else if (command === 'settings') openSettings('#vim-mode');
   else if (command === 'choose-library') run(chooseLibrary());
+  else if (command === 'asset-cleanup') assetCleanup.open();
   else if (command === 'find') showFind();
   else if (command === 'save') run(saveCurrent());
   else if (command === 'cycle-view') run(setView(['editor', 'split', 'preview'][(['editor', 'split', 'preview'].indexOf(settings.viewMode) + 1) % 3]));

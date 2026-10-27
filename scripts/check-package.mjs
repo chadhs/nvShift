@@ -14,12 +14,16 @@ const archive = path.join(resources, 'app.asar');
 const files = new Set(listPackage(archive).map((file) => file.replaceAll('\\', '/').replace(/^\//, '')));
 for (const file of [
   'package.json', 'LICENSE', 'README.org', 'THIRD-PARTY-NOTICES.org',
-  'dist/index.html', 'dist/document-analysis.cjs', 'electron/main.cjs', 'electron/preload.cjs',
+  'dist/index.html', 'dist/document-analysis.cjs', 'dist/asset-references.cjs',
+  'electron/main.cjs', 'electron/preload.cjs', 'electron/asset-cleanup.cjs', 'electron/asset-cleanup-worker.cjs',
 ]) assert.ok(files.has(file), `Packaged application is missing ${file}`);
 const manifest = JSON.parse(extractFile(archive, 'package.json').toString());
 assert.equal(manifest.name, 'nvshift');
 assert.equal(manifest.main, 'electron/main.cjs');
 assert.equal(manifest.license, 'BSD-3-Clause');
+const license = extractFile(archive, 'LICENSE').toString();
+assert.match(license, /^BSD 3-Clause License/);
+assert.match(license, /Copyright \(c\) 2026, Chad Stovern/);
 const notices = extractFile(archive, 'THIRD-PARTY-NOTICES.org').toString();
 assert.match(notices, /nvShift's own code uses BSD-3-Clause/);
 assert.doesNotMatch(notices, /^License: (?:undefined|null|UNLICENSED)\s*$/m);

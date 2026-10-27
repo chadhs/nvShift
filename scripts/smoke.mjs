@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Chad Stovern. BSD-3-Clause.
 import { _electron as electron, expect } from '@playwright/test';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm, symlink, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -16,6 +17,22 @@ await mkdir(path.join(root, 'assets'));
 await mkdir(path.join(root, '.hidden'));
 const png = await readFile('build/icons/16x16.png');
 await writeFile(path.join(root, 'assets', 'pixel.png'), png);
+for (const name of ['cleanup-unused.png', 'cleanup-backup.png', 'cleanup-undo.png', 'cleanup-fail.png', 'cleanup-stale.png']) {
+  await writeFile(path.join(root, 'assets', name), png);
+}
+// A saved historical version must remain reviewable without being mistaken for
+// a current note or this session's Undo history.
+const canonicalRoot = await realpath(root);
+const recoverySnapshots = path.join(profile, 'recovery', createHash('sha256').update(canonicalRoot).digest('hex').slice(0, 24), 'snapshots');
+await mkdir(recoverySnapshots, { recursive: true });
+const rootIdentity = await stat(canonicalRoot);
+const historicalSource = '# Historical version\n![Old image](assets/cleanup-backup.png)';
+await writeFile(path.join(recoverySnapshots, 'smoke-cleanup-history.json'), JSON.stringify({
+  version: 2, reason: 'before-save', path: path.join(canonicalRoot, 'Welcome.md'),
+  logicalPath: path.join(canonicalRoot, 'Welcome.md'), directoryIdentity: `${rootIdentity.dev}:${rootIdentity.ino}`,
+  savedAt: Date.now() - 86400000, buffer: historicalSource, bom: false, newline: '\n',
+  baseFingerprint: '', disk: { source: historicalSource, bom: false, newline: '\n', fingerprint: '' },
+}));
 let remoteRequests = 0;
 const server = createServer((_request, response) => { remoteRequests++; response.writeHead(200, { 'Content-Type': 'image/png' }); response.end(png); });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -48,6 +65,18 @@ let app, window;
 const errors = [];
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const source = () => window.locator('#editor .cm-content');
+const searchField = () => window.locator('#library-search');
+const highlightedResult = () => window.locator('#results .result-item[aria-selected="true"]');
+async function expectHighlightedNote() {
+  const id = await highlightedResult().getAttribute('data-id');
+  await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).document?.id).toBe(id);
+  const extension = await highlightedResult().locator('.result-extension').textContent();
+  await expect(window.locator('#note-path')).toHaveText(`duplicate${extension}`);
+  await expect(window.locator('#note-title')).toHaveText(extension === '.md' ? 'Deep document' : 'Other duplicate');
+  await expect(source()).toContainText(extension === '.md' ? 'Cobalt zeppelin' : 'Cobalt another');
+  await expect(searchField()).toBeFocused();
+  return id;
+}
 async function search(query) {
   await window.locator('#library-search').fill(query);
   await expect.poll(async () => (await window.evaluate(() => window.nvShift.search(document.querySelector('#library-search').value))).query).toBe(query);
@@ -80,6 +109,46 @@ async function setSetting(id, value) {
 }
 async function doneSettings() { if (await window.locator('#settings-dialog').isVisible()) await window.locator('#settings-done').click(); }
 async function waitSaved() { await expect(window.locator('#save-status')).toHaveText('Saved', { timeout: 15000 }); }
+const cleanupItem = (name) => window.locator(`#cleanup-dialog .cleanup-item[data-name=${JSON.stringify(name)}]`);
+const fileExists = (file) => stat(file).then(() => true, (error) => { if (error.code === 'ENOENT') return false; throw error; });
+async function openCleanup({ wait = true } = {}) {
+  await app.evaluate(({ Menu }) => {
+    const menu = Menu.getApplicationMenu()?.items.find((item) => item.label.replaceAll('&', '') === 'File');
+    const item = menu?.submenu?.items.find((entry) => entry.label === 'Find unused assets…');
+    if (!item || !item.enabled) throw new Error('Find unused assets menu action is unavailable');
+    item.click();
+  });
+  await expect(window.locator('#cleanup-dialog')).toBeVisible();
+  if (wait) await expect(window.locator('#cleanup-progress')).toHaveAttribute('data-status', 'complete', { timeout: 30000 });
+}
+async function rescanCleanup() {
+  const previous = await window.locator('#cleanup-dialog').getAttribute('data-scan-id');
+  await window.locator('#cleanup-rescan').click();
+  await expect.poll(() => window.locator('#cleanup-dialog').getAttribute('data-scan-id')).not.toBe(previous);
+  await expect(window.locator('#cleanup-progress')).toHaveAttribute('data-status', 'complete', { timeout: 30000 });
+}
+async function installAssetTrashFixture() {
+  const destination = path.join(directory, 'asset-trash');
+  await mkdir(destination, { recursive: true });
+  await app.evaluate(async ({ shell }, { destination, root }) => {
+    const fs = process.getBuiltinModule('node:fs/promises');
+    const paths = process.getBuiltinModule('node:path');
+    const key = (file) => process.platform === 'win32' ? paths.resolve(file).toLowerCase() : paths.resolve(file);
+    globalThis.smokeOriginalAssetTrash = shell.trashItem;
+    shell.trashItem = async (file) => {
+      if (key(paths.dirname(file)) !== key(paths.join(root, 'assets'))) throw new Error('Asset fixture refused an unexpected path');
+      if (paths.basename(file) === 'cleanup-fail.png') throw new Error('Simulated asset trash failure');
+      await fs.rename(file, paths.join(destination, paths.basename(file)));
+    };
+  }, { destination, root: canonicalRoot });
+  return destination;
+}
+async function restoreAssetTrashFixture() {
+  await app.evaluate(({ shell }) => {
+    if (globalThis.smokeOriginalAssetTrash) shell.trashItem = globalThis.smokeOriginalAssetTrash;
+    delete globalThis.smokeOriginalAssetTrash;
+  });
+}
 async function launch({ firstRun = false } = {}) {
   app = await electron.launch({ executablePath, args: [...appArgs, ...(firstRun ? [] : [`--library=${root}`]), profileArg], env, chromiumSandbox: true, timeout: 30000 });
   window = await app.firstWindow();
@@ -107,6 +176,124 @@ try {
   await expect(window.locator('#results')).toContainText('nested');
   await search('duplicate');
   await expect(window.locator('#results .result-item:not(.create-result)')).toHaveCount(2);
+
+  // Arrow browsing shows each highlighted result without leaving search.
+  const duplicateIds = await window.locator('#results .result-item').evaluateAll((elements) => elements.map((element) => element.dataset.id));
+  await searchField().press('ArrowDown');
+  expect(await expectHighlightedNote()).toBe(duplicateIds[1]);
+  await searchField().press('ArrowUp');
+  expect(await expectHighlightedNote()).toBe(duplicateIds[0]);
+  await searchField().press('ArrowUp');
+  expect(await expectHighlightedNote()).toBe(duplicateIds[1]);
+  await searchField().press('ArrowDown');
+  expect(await expectHighlightedNote()).toBe(duplicateIds[0]);
+
+  // Burst requests must settle on the final row, rather than a stale open.
+  await searchField().evaluate((element) => {
+    for (const key of ['ArrowDown', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowUp', 'ArrowDown']) {
+      element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    }
+  });
+  const enteredId = await expectHighlightedNote();
+  await searchField().press('Enter');
+  await expect(source()).toBeFocused();
+  await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).document?.id).toBe(enteredId);
+
+  // Starting another browse flushes a just-typed buffer before changing notes.
+  const edited = (await window.evaluate(() => window.nvShift.initial())).document;
+  await window.keyboard.press(`${modifier}+End`);
+  await window.keyboard.insertText('\nKeyboard browse flush marker.');
+  await window.keyboard.press(`${modifier}+l`);
+  await searchField().press('ArrowDown');
+  const otherId = await expectHighlightedNote();
+  expect(otherId).not.toBe(edited.id);
+  expect(await readFile(edited.path, 'utf8')).toContain('Keyboard browse flush marker.');
+
+  // Browsing respects the current Split/Preview view; Enter chooses editing.
+  await window.locator('#view-split').click();
+  await window.keyboard.press(`${modifier}+l`);
+  await searchField().press('ArrowUp');
+  await expectHighlightedNote();
+  await expect(window.locator('#workspace')).toHaveAttribute('data-view', 'split');
+  await expect(window.locator('#content')).toContainText('Cobalt');
+  await expect(window.locator('#document-title')).toHaveText(await window.locator('#note-title').textContent());
+  await expect(searchField()).toBeFocused();
+  await window.locator('#view-preview').click();
+  await window.keyboard.press(`${modifier}+l`);
+  await searchField().press('ArrowDown');
+  const previewId = await expectHighlightedNote();
+  await expect(window.locator('#workspace')).toHaveAttribute('data-view', 'preview');
+  await expect(window.locator('#content')).toContainText('Cobalt');
+  await searchField().press('Enter');
+  await expect(window.locator('#workspace')).toHaveAttribute('data-view', 'editor');
+  await expect(source()).toBeFocused();
+  await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).document?.id).toBe(previewId);
+
+  // A Create row is only a proposal until Enter or Mod+Enter confirms it.
+  const countBeforeCreate = (await window.evaluate(() => window.nvShift.initial())).library.count;
+  await search('Browse planned note');
+  await expect(window.locator('#results .create-result')).toBeVisible();
+  await searchField().press('ArrowDown');
+  await expect(highlightedResult()).toHaveClass(/create-result/);
+  await expect(searchField()).toBeFocused();
+  expect((await window.evaluate(() => window.nvShift.initial())).library.count).toBe(countBeforeCreate);
+  expect((await readdir(root)).includes('Browse planned note.md')).toBe(false);
+  await searchField().press(`${modifier}+Enter`);
+  await expect(window.locator('#note-path')).toHaveText('Browse planned note.md');
+  await expect(source()).toBeFocused();
+  expect((await window.evaluate(() => window.nvShift.initial())).library.count).toBe(countBeforeCreate + 1);
+
+  // Typing during a pending browse keeps focus and Enter follows the new query.
+  await search('duplicate');
+  await expect(window.locator('#results .result-item:not(.create-result)')).toHaveCount(2);
+  await searchField().press('ArrowDown');
+  await searchField().fill('Welcome.md');
+  await expect(window.locator('#results .result-item:not(.create-result)')).toHaveCount(1);
+  await expect(window.locator('#results .result-title')).toHaveText('Welcome');
+  await expect(searchField()).toBeFocused();
+  await expect(searchField()).toHaveValue('Welcome.md');
+  await searchField().press('Enter');
+  await expect(window.locator('#note-path')).toHaveText('Welcome.md');
+  await expect(source()).toBeFocused();
+
+  // Gate one started IPC open so its response arrives after a newer Enter.
+  // Electron's pinned test runtime exposes its registered invoke-handler map;
+  // no application or preload test hooks are needed, and the handler is restored.
+  await search('duplicate');
+  await expect(window.locator('#results .result-item:not(.create-result)')).toHaveCount(2);
+  await app.evaluate(({ ipcMain }) => {
+    const original = ipcMain._invokeHandlers.get('note:open');
+    if (typeof original !== 'function') throw new Error('Missing note:open fixture handler');
+    const gate = globalThis.smokeBrowseOpen = { original, started: false, release: null };
+    ipcMain.removeHandler('note:open');
+    ipcMain.handle('note:open', async (...args) => {
+      if (!gate.started) {
+        gate.started = true;
+        await new Promise((resolve) => { gate.release = resolve; });
+      }
+      return original(...args);
+    });
+  });
+  try {
+    await searchField().press('ArrowDown');
+    await expect.poll(() => app.evaluate(() => globalThis.smokeBrowseOpen.started)).toBe(true);
+    await searchField().fill('Welcome.md');
+    await expect(window.locator('#results .result-item:not(.create-result)')).toHaveCount(1);
+    await expect(searchField()).toBeFocused();
+    await searchField().press('Enter');
+    await app.evaluate(() => globalThis.smokeBrowseOpen.release());
+    await expect(window.locator('#note-path')).toHaveText('Welcome.md');
+    await expect(source()).toBeFocused();
+    await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).document?.name).toBe('Welcome.md');
+  } finally {
+    await app.evaluate(({ ipcMain }) => {
+      const gate = globalThis.smokeBrowseOpen;
+      gate.release?.();
+      ipcMain.removeHandler('note:open');
+      ipcMain.handle('note:open', gate.original);
+      delete globalThis.smokeBrowseOpen;
+    });
+  }
 
   await openNote('Linked', 'Linked note');
   await expect(window.locator('#note-folder')).toHaveText('linked');
@@ -300,6 +487,7 @@ try {
   await doneSettings();
 
   // A synthetic file clipboard exercises the actual paste handler without changing the system clipboard.
+  const pngCountBeforePaste = (await readdir(path.join(root, 'assets'))).filter((name) => name.endsWith('.png')).length;
   await source().click();
   await window.keyboard.press(`${modifier}+End`);
   await window.evaluate((bytes) => {
@@ -308,6 +496,7 @@ try {
     document.querySelector('#editor .cm-content').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
   }, [...png]);
   await expect(source()).toContainText('![Image](assets/');
+  await expect.poll(async () => (await readdir(path.join(root, 'assets'))).filter((name) => name.endsWith('.png')).length).toBeGreaterThan(pngCountBeforePaste);
   await waitSaved();
   expect((await readdir(path.join(root, 'assets'))).some((name) => /^clipboard-[a-f0-9-]+\.png$/.test(name))).toBe(true);
   expect((await readdir(path.join(root, 'assets'))).filter((name) => name.endsWith('.png')).length).toBeGreaterThan(1);
@@ -315,10 +504,12 @@ try {
   // CDP uses native file-backed drops, so Electron's webUtils path authorization is exercised.
   const dropped = path.join(directory, 'dropped.png');
   await writeFile(dropped, png);
+  const pngCountBeforeDrop = (await readdir(path.join(root, 'assets'))).filter((name) => name.endsWith('.png')).length;
   const box = await window.locator('#editor').boundingBox();
   const cdp = await window.context().newCDPSession(window);
   for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', { type, x: box.x + 60, y: box.y + 60, data: { items: [], files: [dropped], dragOperationsMask: 1 } });
-  await expect.poll(async () => (await readdir(path.join(root, 'assets'))).filter((name) => name.endsWith('.png')).length).toBeGreaterThan(2);
+  await expect.poll(async () => (await readdir(path.join(root, 'assets'))).filter((name) => name.endsWith('.png')).length).toBeGreaterThan(pngCountBeforeDrop);
+  await expect(source()).toContainText('dropped-');
   await waitSaved();
   expect((await readdir(path.join(root, 'assets'))).some((name) => /^dropped-[a-f0-9-]+\.png$/.test(name))).toBe(true);
 
@@ -378,6 +569,90 @@ try {
   await app.evaluate(({ globalShortcut }) => { globalShortcut.register = globalThis.originalRegister; });
   await window.evaluate(() => window.nvShift.updateSettings({ globalShortcut: '' }));
 
+  // Removing a saved link keeps its image protected by this session's Undo
+  // history, while older saved snapshots get a separate cleanup review group.
+  await openNote('Browse planned note');
+  await replaceSource('![Undo image](assets/cleanup-undo.png)');
+  await waitSaved();
+  await replaceSource('A note after removing an image link.');
+  await waitSaved();
+  await openNote('Welcome');
+  await openCleanup({ wait: false });
+  await window.locator('#cleanup-close').click();
+  await expect(window.locator('#cleanup-dialog')).toBeHidden();
+  expect(await fileExists(path.join(root, 'assets', 'cleanup-unused.png'))).toBe(true);
+
+  const assetTrash = await installAssetTrashFixture();
+  try {
+    await openCleanup();
+    await expect(window.locator('#cleanup-dialog input[type="checkbox"]:checked')).toHaveCount(0);
+    await expect(window.locator('#cleanup-trash')).toBeDisabled();
+    await expect(cleanupItem('cleanup-unused.png')).toHaveAttribute('data-category', 'unused');
+    await expect(cleanupItem('cleanup-backup.png')).toHaveAttribute('data-category', 'backup');
+    await expect(cleanupItem('pixel.png')).toHaveCount(0);
+    await expect(cleanupItem('cleanup-undo.png')).toHaveCount(0);
+    await expect(window.locator('#cleanup-protected')).toContainText(/Undo|restart/);
+    const thumbnail = cleanupItem('cleanup-unused.png').locator('img');
+    await expect(thumbnail).toBeVisible();
+    await expect.poll(() => thumbnail.evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
+    await window.screenshot({ path: 'test-results/cleanup-review.png' });
+
+    await window.locator('#cleanup-select-all').click();
+    expect(await window.locator('#cleanup-unused input[type="checkbox"]').count()).toBeGreaterThan(0);
+    expect(await window.locator('#cleanup-unused input[type="checkbox"]:checked').count()).toBe(await window.locator('#cleanup-unused input[type="checkbox"]').count());
+    await expect(window.locator('#cleanup-backups input[type="checkbox"]:checked')).toHaveCount(0);
+    await expect(window.locator('#cleanup-selected-total')).not.toContainText('0 selected');
+    while (await window.locator('#cleanup-dialog input[type="checkbox"]:checked').count()) await window.locator('#cleanup-dialog input[type="checkbox"]:checked').first().uncheck();
+    await cleanupItem('cleanup-backup.png').locator('input').check();
+    await expect(window.locator('#cleanup-trash')).toBeEnabled();
+    await expect(window.locator('#cleanup-selected-total')).toContainText('1 selected');
+    await cleanupItem('cleanup-backup.png').locator('input').uncheck();
+
+    // A batch can succeed partially: a failed Trash operation retains its file.
+    await cleanupItem('cleanup-unused.png').locator('input').check();
+    await cleanupItem('cleanup-fail.png').locator('input').check();
+    await window.locator('#cleanup-trash').click();
+    await expect.poll(() => fileExists(path.join(root, 'assets', 'cleanup-unused.png'))).toBe(false);
+    expect(await fileExists(path.join(assetTrash, 'cleanup-unused.png'))).toBe(true);
+    expect(await fileExists(path.join(root, 'assets', 'cleanup-fail.png'))).toBe(true);
+    await expect(cleanupItem('cleanup-unused.png')).toHaveCount(0);
+    await expect(cleanupItem('cleanup-fail.png')).toHaveCount(1);
+    await expect(window.locator('#cleanup-errors')).toContainText('Simulated asset trash failure');
+
+    await rescanCleanup();
+    const staleScan = await window.locator('#cleanup-dialog').getAttribute('data-scan-id');
+    const staleId = await cleanupItem('cleanup-stale.png').getAttribute('data-id');
+    // A reference introduced after review must prevent even an old opaque-ID
+    // removal request from trashing a file that is now needed by a note.
+    await writeFile(path.join(root, 'Browse planned note.md'), 'A note with a new [image link](assets/cleanup-stale.png).');
+    const staleResult = await window.evaluate(async ({ scanId, id }) => {
+      try { return await window.nvShift.trashUnusedAssets(scanId, [id]); }
+      catch (error) { return { error: error.message }; }
+    }, { scanId: staleScan, id: staleId });
+    expect(staleResult.removed ?? []).not.toContain(staleId);
+    expect(Boolean(staleResult.error || staleResult.failed?.length)).toBe(true);
+    expect(await fileExists(path.join(root, 'assets', 'cleanup-stale.png'))).toBe(true);
+    // Wait for the watched disk edit to reach the library before requesting a
+    // stable review; the negative request above intentionally races that edit.
+    await expect.poll(async () => window.evaluate(async () => (await window.nvShift.search('cleanup stale')).results.some((note) => note.name === 'Browse planned note.md'))).toBe(true);
+    await rescanCleanup();
+    await expect(cleanupItem('cleanup-stale.png')).toHaveCount(0);
+
+    // An imported image is protected before its link is inserted into a buffer.
+    const namesBeforeImport = new Set(await readdir(path.join(root, 'assets')));
+    await window.evaluate(async (bytes) => {
+      const { document } = await window.nvShift.initial();
+      return window.nvShift.insertImage(document.id, new Uint8Array(bytes), 'clipboard.png');
+    }, [...png]);
+    const importedNames = (await readdir(path.join(root, 'assets'))).filter((name) => !namesBeforeImport.has(name));
+    expect(importedNames).toHaveLength(1);
+    await rescanCleanup();
+    await expect(cleanupItem(importedNames[0])).toHaveCount(0);
+    expect(await fileExists(path.join(root, 'assets', importedNames[0]))).toBe(true);
+    await window.locator('#cleanup-close').click();
+    await expect(window.locator('#cleanup-dialog')).toBeHidden();
+  } finally { await restoreAssetTrashFixture(); }
+
   await setSetting('#filename-headings', true);
   await doneSettings();
   await expect(window.locator('#note-title')).toHaveText('Welcome');
@@ -406,6 +681,23 @@ try {
   expect(restored.settings.sansSerifHeadings).toBe(true);
   expect(restored.settings.contentWidth).toBe('full');
   expect(restored.settings.filenameHeadings).toBe(true);
+  // Undo pins end at app restart. The removed image remains an older-backup
+  // candidate, which is explicitly selectable without touching its snapshots.
+  const restartedTrash = await installAssetTrashFixture();
+  try {
+    await openCleanup();
+    await expect(cleanupItem('cleanup-undo.png')).toHaveAttribute('data-category', 'backup');
+    await expect(window.locator('#cleanup-dialog input[type="checkbox"]:checked')).toHaveCount(0);
+    await window.locator('#cleanup-select-all').click();
+    await expect(cleanupItem('cleanup-undo.png').locator('input')).not.toBeChecked();
+    while (await window.locator('#cleanup-dialog input[type="checkbox"]:checked').count()) await window.locator('#cleanup-dialog input[type="checkbox"]:checked').first().uncheck();
+    await cleanupItem('cleanup-undo.png').locator('input').check();
+    await window.locator('#cleanup-trash').click();
+    await expect.poll(() => fileExists(path.join(root, 'assets', 'cleanup-undo.png'))).toBe(false);
+    expect(await fileExists(path.join(restartedTrash, 'cleanup-undo.png'))).toBe(true);
+    expect(await fileExists(path.join(recoverySnapshots, 'smoke-cleanup-history.json'))).toBe(true);
+    await window.locator('#cleanup-close').click();
+  } finally { await restoreAssetTrashFixture(); }
   await openNote('Welcome', 'Welcome');
   await setSetting('#filename-headings', false);
   await doneSettings();
@@ -419,7 +711,14 @@ try {
   await expect(source()).toContainText('Renderer recovery marker', { timeout: 15000 });
   await waitSaved();
   expect(errors).toEqual([]);
-  console.log(`nvShift ${executablePath ? 'packaged' : 'development'} smoke passed: recursive search, content headings/unsaved titles/filename preference, keyboard creation, Org list continuation/Vim/:w/undo, all themes, .txt syntax, images, Mermaid, external saves/conflicts, rename, settings restart, sandbox, shortcut errors, background/relaunch.`);
+  console.log(`nvShift ${executablePath ? 'packaged' : 'development'} smoke passed: recursive search, arrow-result browsing/focus/flush/latest selection, content headings/unsaved titles/filename preference, keyboard creation, Org list continuation/Vim/:w/undo, all themes, .txt syntax, images, asset cleanup/recovery/Undo/Trash/revalidation, Mermaid, external saves/conflicts, rename, settings restart, sandbox, shortcut errors, background/relaunch.`);
+} catch (error) {
+  console.error('Smoke failure details:', JSON.stringify({ errors, state: await window?.evaluate(async () => {
+    const initial = await window.nvShift.initial().then((state) => ({ library: state.library, document: state.document?.name })).catch((failure) => ({ error: failure.message }));
+    return { initial, message: document.querySelector('#message-text')?.textContent, summary: document.querySelector('#library-summary')?.textContent, cleanup: document.querySelector('#cleanup-errors')?.textContent };
+  }).catch((failure) => ({ error: failure.message })) }));
+  await window?.screenshot({ path: `test-results/${executablePath ? 'packaged' : 'desktop'}-failure.png`, timeout: 5000 }).catch(() => {});
+  throw error;
 } finally {
   if (app) await app.close().catch(() => { app.process().kill('SIGKILL'); });
   await new Promise((resolve) => server.close(resolve));

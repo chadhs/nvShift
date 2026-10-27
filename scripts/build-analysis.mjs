@@ -13,6 +13,16 @@ await build({
     lib: { entry: 'src/document-analysis.js', formats: ['cjs'], fileName: () => 'document-analysis.cjs' },
   },
 });
+// Cleanup uses its own uncapped reference collector in a bounded Node worker.
+await build({
+  configFile: false,
+  resolve: { conditions: ['node'], mainFields: ['module', 'main'] },
+  build: {
+    target: 'node24', outDir: 'dist', emptyOutDir: false, minify: false,
+    rolldownOptions: { external: [...builtinModules, ...builtinModules.map((name) => `node:${name}`)] },
+    lib: { entry: 'src/asset-references.js', formats: ['cjs'], fileName: () => 'asset-references.cjs' },
+  },
+});
 // Exercise the shipped file outside the repository, without DOM globals or dependencies.
 const directory = await mkdtemp(path.join(tmpdir(), 'markup-preview-analysis-'));
 try {
@@ -34,4 +44,18 @@ try {
       assert.equal(analyzeDocument({ source, format }).metadata.draft, true);
     }
   `, bundle], { stdio: 'inherit' });
+  const references = path.join(directory, 'asset-references.cjs');
+  await copyFile('dist/asset-references.cjs', references);
+  execFileSync(process.execPath, ['-e', String.raw`
+    const assert = require('node:assert/strict');
+    const path = require('node:path');
+    const { collectAssetReferences } = require(process.argv[1]);
+    const assets = Array.from({ length: 130 }, (_, index) => ({
+      id: String(index), name: 'asset-' + index + '.png',
+      path: path.resolve('assets', 'asset-' + index + '.png'),
+    }));
+    const source = assets.map((asset) => '![Image](assets/' + asset.name + ')').join('\n\n');
+    collectAssetReferences({ path: path.resolve('Note.md'), format: 'markdown', source }, assets)
+      .then((ids) => assert.equal(ids.length, 130)).catch((error) => { console.error(error); process.exitCode = 1; });
+  `, references], { stdio: 'inherit', cwd: directory });
 } finally { await rm(directory, { recursive: true, force: true }); }

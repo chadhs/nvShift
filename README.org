@@ -1,6 +1,8 @@
 #+title: nvShift
 #+subtitle: Notational Velocity for everyone.
 
+[[file:build/icons/128x128.png]]
+
 nvShift is a keyboard-driven desktop notes editor for macOS, Linux, and Windows.
 Search your notes, create one from the same field, and start writing. Notes are
 ordinary UTF-8 files in a folder you choose. Markdown and Org previews display
@@ -36,6 +38,46 @@ To open a particular library from the command line:
 npm start -- --library=/absolute/path/to/notes
 #+end_src
 
+* Install
+Download [[https://github.com/chadhs/nvShift/releases/latest][the latest release]] and its platform's SHA-256 checksum file.
+Downloaded builds need no Node.js, npm, or Emacs. GitHub's Source code archives
+are not installers. The first public release is =v0.1.0=; earlier local version
+numbers were development milestones.
+
+** macOS, Apple Silicon
+Quit existing copies of nvShift using its Quit action. Open the arm64 DMG,
+drag =nvShift.app= into Applications, and eject the image. Launch the Applications
+copy and choose a notes folder. The ZIP is an alternative to the DMG.
+
+Packages are ad-hoc signed for bundle integrity and are not Developer-ID-signed
+or notarized. Follow [[https://support.apple.com/en-us/102445][Apple's first-launch guidance]] when macOS asks you to approve
+an app from an unidentified developer. Verify the download's checksum before
+approving the app. Intel Mac packages are not included.
+
+** Linux, x86_64
+Download the AppImage or tar.gz and =SHA256SUMS-linux-x64.txt=. Verify the package
+with =sha256sum=. Make the AppImage executable and run it. If FUSE 2 is unavailable,
+use =--appimage-extract-and-run= or extract the tarball into a folder you own and
+launch its =nvshift= executable as your normal user.
+
+For native Wayland global-shortcut support, install the supplied
+=com.chadhs.nvshift.desktop= launcher under =~/.local/share/applications/= and
+set its =Exec= to the absolute path of your executable. Keep that reverse-DNS
+filename. X11 and Wayland tray/portal availability depend on your desktop.
+The library can also be selected with =nvshift --library=/absolute/path/to/notes=.
+
+** Windows, Intel/AMD x64
+Download =nvshift-VERSION-win-x64-setup.exe= and =SHA256SUMS-win32-x64.txt=.
+Compare the checksum with PowerShell's =Get-FileHash -Algorithm SHA256=, then run
+the installer as your normal user. It installs per-user without administrator
+access. Open nvShift from Start and choose a notes folder. The installer is
+unsigned; Windows may display an unknown-publisher or SmartScreen prompt.
+
+To update on any platform, Quit nvShift and replace the app or run the new
+Windows installer. Closing the window only hides it. Notes and preferences are
+preserved. On Windows, uninstall through Settings → Apps. There is no in-app
+updater; native Windows ARM64 packages are not included.
+
 * Find or create a note
 Type in the search field to find matching filenames and contents. Search is
 case-insensitive, matches word prefixes, and requires every query term. Exact
@@ -43,9 +85,12 @@ titles rank first, followed by other title matches and content matches. An empty
 search shows recently modified notes. Results show their relative folder when
 needed to distinguish names.
 
-Use Up and Down to select a result, then Enter to edit it. A separate Create
-result creates a note using the current query as its title. =Cmd/Ctrl+Enter=
-creates directly. Choose the extension beside the search field. Filename
+Use Up and Down to highlight results and show each note while focus stays in
+search. Browsing keeps the current Editor, Split, or Preview view; Enter opens
+the highlighted note for editing and focuses its editor. Pending edits are
+saved before browsing another note. A separate Create result creates a note
+using the current query as its title. Highlighting Create does not create a file.
+=Cmd/Ctrl+Enter= creates directly. Choose the extension beside the search field. Filename
 validation and exclusive creation prevent replacing an existing note.
 
 | Shortcut | Action |
@@ -120,7 +165,18 @@ different Windows drives use local file URLs.
 
 Markdown syntax inserts an image link, Org inserts an Org file link, and plain
 text inserts the path as text. Deleting a note or removing a link does not delete
-its image assets. Asset cleanup is manual in this MVP.
+its image assets. Use File → Find unused assets to review regular images directly
+in the selected library's =assets/= folder and move explicitly selected images
+to the OS Trash. Nothing is preselected; Select all unused excludes the separate
+group referenced only by older recovery backups. An older note version may need
+its image restored from Trash too.
+
+Cleanup checks all supported library notes, including linked directories, saved
+content, current buffers, and active recovery drafts. Undo references and recent
+imports stay protected until nvShift restarts, including across library switches.
+Incomplete scans block removal, and changed results require another scan. The
+scan does not establish references from unrelated notes outside this library.
+Symlinks, nested asset folders, and external image locations are not cleaned.
 
 Local image links and HTTP/HTTPS images display in the preview. Remote images
 contact their hosts; requests omit cookies, authentication, and document
@@ -215,11 +271,19 @@ executable. =scripts/check-package.mjs= checks packaged identity, required files
 and license notices. The Windows installer lifecycle helper is restricted to a
 disposable GitHub Actions runner.
 
-The prepared workflow under =.github/workflows/= tests and builds artifacts. It
-has read-only repository permissions and no release or publishing step. This
-repository is local until a remote is deliberately configured. Native Linux,
-Windows, installer, and Wayland checks remain pending until actually executed;
-package configuration alone does not validate those systems.
+Reusable workflows under =.github/workflows/= test and package macOS arm64,
+Linux x64, and Windows x64 builds. PR/manual checks are read-only. While the
+repository variable =RELEASES_ENABLED= is disabled, main pushes run native checks
+without publishing. After the bootstrap checks pass, enabling that variable and
+dispatching the release workflow publishes =v0.1.0=. Later new main sources
+automatically publish minor versions: =v0.2.0=, =v0.3.0=, and so on.
+
+Only publishing receives repository write permission. All native builds,
+package checks, and verified checksums must pass before a draft is published.
+See [[file:RELEASE-NOTES.org][release information]] for retries, installation, and release details.
+Hosted workflow summaries establish native-runner results. Interactive Wayland,
+physical shortcuts, native picker interactions, and native Trash remain manual
+checks until actually executed; package configuration alone does not validate them.
 
 Developer signing certificates, macOS notarization, Windows code signing,
 automatic updates, TextBundle/TextPack, rich-text editing, and full Emacs Org

@@ -1,0 +1,67 @@
+#+title: nvShift releases
+
+* First public release: v0.1.0
+nvShift brings Notational Velocity's search-and-create workflow to ordinary local
+plain-text, Markdown, and Org notes on macOS, Linux, and Windows. Earlier local
+0.1.x builds were development milestones; the first public version is =v0.1.0=.
+
+This release includes linked-directory notes, keyboard result browsing, safe
+autosave and recovery, optional Vim editing, content-based headings, four themes,
+image paste/drop with readable filenames, Mermaid preview, manual unused-asset
+cleanup, and the copper Shift-key icon. New notes stay at the library root.
+
+nvShift's own source and icons use BSD-3-Clause, copyright Chad Stovern.
+Third-party licenses and Electron notices accompany each packaged application.
+
+* Downloads and installation
+Download packages from [[https://github.com/chadhs/nvShift/releases/latest][the latest release]] and compare their SHA-256 checksums.
+GitHub's Source code archives contain source, not application installers.
+
+| Platform | Packages | Checksum file |
+|----------+----------+---------------|
+| macOS Apple Silicon | arm64 DMG and ZIP | SHA256SUMS-darwin-arm64.txt |
+| Linux x86_64 | AppImage and tar.gz | SHA256SUMS-linux-x64.txt |
+| Windows Intel/AMD x64 | Per-user NSIS installer | SHA256SUMS-win32-x64.txt |
+
+See [[file:README.org::*Install][Install]] for first-launch, update, and uninstall instructions.
+Quit nvShift before updating: closing its window only hides it to the tray or
+menu bar. Notes and preferences remain in place when replacing the application.
+
+macOS packages are ad-hoc signed, without Developer ID signing or notarization.
+Windows installers are unsigned. Intel Mac and native Windows ARM64 packages
+are not supplied. There is no in-app updater.
+
+* Release process
+PRs and manual Desktop checks runs use read-only reusable desktop build jobs.
+While the repository variable =RELEASES_ENABLED= is absent or false, main pushes
+also run those checks and publish nothing. This allows the first public source
+to pass all native jobs before publication is enabled.
+
+After bootstrap, =RELEASES_ENABLED=true= enables automatic releases from trusted
+main pushes and merged-PR fallback events. The first release uses the checked-in
+version =0.1.0=. Each subsequent new source increments the highest stable tag's
+minor version and resets patch to zero: =v0.2.0=, =v0.3.0=, and so on.
+Documentation-only main changes also release.
+
+The release workflow checks out the exact source SHA, requires it to belong to
+main history, and stamps both package manifests for the build. Only after all
+native tests and package checks pass does publishing verify exactly five
+packages and three platform checksum files. It creates a versioned child commit
+and tag marked =nvShift-Source:=, uploads into a draft, and publishes after every
+upload verifies. The versioned child commit is not pushed back onto main.
+
+Duplicate events and retries reuse the source's existing tag. Interrupted drafts
+resume without replacing published releases or changing a newer latest release.
+For recovery, rerun the failed Actions run, or dispatch =Release a minor version=
+from main. Publishing alone receives repository write permission; build jobs
+receive no signing or notarization credentials.
+
+* Validation
+Publication requires native macOS arm64, Linux x64, and Windows x64 build jobs,
+the full test suite, the search benchmark, development and packaged-app smoke
+checks, artifact inspection, and license verification. Windows checks also
+exercise install, reinstall, and uninstall with preferences preserved.
+
+Hosted run summaries are the evidence for native-runner results. Interactive
+Wayland, physical global shortcuts, native folder-picker interaction, and native
+Trash checks remain separate manual acceptance work until actually executed.

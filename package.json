@@ -1,6 +1,6 @@
 {
   "name": "nvshift",
-  "version": "0.1.4",
+  "version": "0.1.0",
   "description": "Notational Velocity for everyone.",
   "author": "Chad Stovern",
   "license": "BSD-3-Clause",
@@ -158,5 +158,10 @@
   "overrides": {
     "text-kit": "4.5.1",
     "katex": "0.19.1"
+  },
+  "repository": "github:chadhs/nvShift",
+  "homepage": "https://github.com/chadhs/nvShift#readme",
+  "bugs": {
+    "url": "https://github.com/chadhs/nvShift/issues"
   }
 }

@@ -581,6 +581,18 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
 
   const controller = {
     snapshot,
+    // Cleanup receives detached, main-owned buffers, including notes which no
+    // longer exist on disk but still have a recoverable conflicting draft.
+    async cleanupSnapshot() {
+      await topologyQueue;
+      await Promise.all([...watcherTasks]);
+      await Promise.all([...records.values()].map((record) => record.queue));
+      return {
+        root, generation, indexing, scanning, errors: [...problems.values()],
+        preferences: { ...preferences }, recoveryRoot: root ? recoveryRoot() : null,
+        documents: [...records.values()].map((record) => ({ ...document(record), baseSource: record.baseSource })),
+      };
+    },
     active: () => document(records.get(activeId)),
     get: (id) => document(records.get(id)),
     getByPath: (file) => document(records.get(paths.get(pathKey(file)))),
