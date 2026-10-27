@@ -107,7 +107,10 @@ async function setSetting(id, value) {
   const control = window.locator(id);
   if (typeof value === 'boolean') await control.setChecked(value); else await control.selectOption(value);
 }
-async function doneSettings() { if (await window.locator('#settings-dialog').isVisible()) await window.locator('#settings-done').click(); }
+async function doneSettings() {
+  if (await window.locator('#settings-dialog').isVisible()) await window.locator('#settings-done').click();
+  await expect(window.locator('#settings-dialog')).toBeHidden();
+}
 async function waitSaved() { await expect(window.locator('#save-status')).toHaveText('Saved', { timeout: 15000 }); }
 const cleanupItem = (name) => window.locator(`#cleanup-dialog .cleanup-item[data-name=${JSON.stringify(name)}]`);
 const fileExists = (file) => stat(file).then(() => true, (error) => { if (error.code === 'ENOENT') return false; throw error; });
@@ -330,7 +333,32 @@ try {
   await expect(window.locator('#content img[onerror]')).toHaveCount(0);
 
   // Content titles work in Editor view, including headings after an introduction.
-  await window.locator('#view-editor').click();
+  // A slow view preference write must not pull focus back after starting search.
+  await app.evaluate(({ ipcMain }) => {
+    const original = ipcMain._invokeHandlers.get('settings:update');
+    const gate = globalThis.smokeViewSettings = { original, started: false, finished: false, release: null };
+    ipcMain.removeHandler('settings:update');
+    ipcMain.handle('settings:update', async (...args) => {
+      if (!gate.started) { gate.started = true; await new Promise((resolve) => { gate.release = resolve; }); }
+      try { return await original(...args); } finally { gate.finished = true; }
+    });
+  });
+  try {
+    await window.locator('#view-editor').click();
+    await expect.poll(() => app.evaluate(() => globalThis.smokeViewSettings.started)).toBe(true);
+    await search('Headings');
+    await app.evaluate(() => globalThis.smokeViewSettings.release());
+    await expect.poll(() => app.evaluate(() => globalThis.smokeViewSettings.finished)).toBe(true);
+    await window.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(searchField()).toBeFocused();
+    await expect(searchField()).toHaveValue('Headings');
+  } finally {
+    await app.evaluate(({ ipcMain }) => {
+      const gate = globalThis.smokeViewSettings; gate.release?.();
+      ipcMain.removeHandler('settings:update'); ipcMain.handle('settings:update', gate.original);
+      delete globalThis.smokeViewSettings;
+    });
+  }
   await openNote('Headings', 'Original heading 日本語');
   await expect(window.locator('#note-path')).toHaveText('Headings.md');
   await expect(window.locator('#results .result-item[data-active="true"] .result-title')).toHaveText('Headings');

@@ -606,8 +606,9 @@ async function renderPreview() {
 }
 async function setView(mode) {
   if (!['editor', 'split', 'preview'].includes(mode)) return;
+  const focused = document.activeElement, noteId = current?.id, searchVersion = resultMoveVersion;
   await updateSettings({ viewMode: mode });
-  if (mode !== 'preview') editor.focus();
+  if (mode !== 'preview' && current?.id === noteId && document.activeElement === focused && resultMoveVersion === searchVersion) editor.focus();
 }
 function showFind() {
   if (!current) return;
@@ -646,7 +647,9 @@ function openSettings(focus = '#appearance-mode') {
 async function closeSettings() {
   let pending;
   do { pending = settingsQueue; await pending.catch(() => {}); } while (pending !== settingsQueue);
+  const bookmark = settingsBookmark; settingsBookmark = null;
   $('#settings-dialog').close();
+  editor.restoreSelection(bookmark);
 }
 
 $('#dismiss-message').addEventListener('click', clearMessage);
@@ -677,6 +680,7 @@ for (const control of [$('#appearance-button'), $('#settings-button')]) control.
   pendingSettingsBookmark = { at: performance.now(), value: editor.selectionBookmark() };
 });
 $('#settings-dialog').addEventListener('close', () => {
+  if ($('#settings-dialog').open) return;
   const bookmark = settingsBookmark; settingsBookmark = null;
   editor.restoreSelection(bookmark);
 });
