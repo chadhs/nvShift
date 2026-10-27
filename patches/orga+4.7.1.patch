@@ -1,0 +1,133 @@
+diff --git a/node_modules/orga/dist/parse/index.js b/node_modules/orga/dist/parse/index.js
+index 94d6721..82cd8d3 100644
+--- a/node_modules/orga/dist/parse/index.js
++++ b/node_modules/orga/dist/parse/index.js
+@@ -93,58 +93,61 @@ export function parser(lexer, options) {
+             : undefined;
+     }
+     function advance() {
+-        if (!handler() && lexer.now >= end) {
+-            return finish();
+-        }
+-        // prevent infinit loop
+-        if (maxStaleIterations === 0) {
+-            throw new Error(`it's stuck. \n${context.state}`);
+-        }
+-        let nothingMatches = true;
+-        for (const { test: _test, action } of handler().rules) {
+-            const token = lexer.peek();
+-            const predicates = Array.isArray(_test) ? _test : [_test];
+-            if (!predicates.some((p) => test(token, p)))
+-                continue;
+-            nothingMatches = false;
+-            if (typeof action !== 'function') {
+-                handlerStack.push(action);
+-                return advance();
++        // Iterate token transitions without growing the JavaScript call stack.
++        advanceLoop: for (;;) {
++            if (!handler() && lexer.now >= end) {
++                return finish();
+             }
+-            const control = action(token, context);
+-            if (typeof control === 'object') {
+-                handlerStack.push(control);
+-                return advance();
++            // prevent infinit loop
++            if (maxStaleIterations === 0) {
++                throw new Error(`it's stuck. \n${context.state}`);
+             }
+-            if (control === 'break') {
+-                handlerStack.pop();
+-                // if (handlerStack.length === 0) {
+-                //   throw new Error('can not pop the root handler')
+-                // }
+-                // return the offset if the block is finished
+-                if (lexer.peek() && context.parent.type === 'document') {
+-                    return lexer.peek().position.start.offset;
++            let nothingMatches = true;
++            for (const { test: _test, action } of handler().rules) {
++                const token = lexer.peek();
++                const predicates = Array.isArray(_test) ? _test : [_test];
++                if (!predicates.some((p) => test(token, p)))
++                    continue;
++                nothingMatches = false;
++                if (typeof action !== 'function') {
++                    handlerStack.push(action);
++                    continue advanceLoop;
+                 }
+-                return advance();
++                const control = action(token, context);
++                if (typeof control === 'object') {
++                    handlerStack.push(control);
++                    continue advanceLoop;
++                }
++                if (control === 'break') {
++                    handlerStack.pop();
++                    // if (handlerStack.length === 0) {
++                    //   throw new Error('can not pop the root handler')
++                    // }
++                    // return the offset if the block is finished
++                    if (lexer.peek() && context.parent.type === 'document') {
++                        return lexer.peek().position.start.offset;
++                    }
++                    continue advanceLoop;
++                }
++                if (control === 'next') {
++                    continue;
++                }
++                break;
+             }
+-            if (control === 'next') {
+-                continue;
++            if (nothingMatches) {
++                handlerStack.pop();
++                continue advanceLoop;
++            }
++            if (lexer.save() === lexerLocation) {
++                maxStaleIterations -= 1;
++            }
++            else {
++                lexerLocation = lexer.save();
++                maxStaleIterations = 10;
+             }
+-            break;
+         }
+-        if (nothingMatches) {
+-            handlerStack.pop();
+-            return advance();
+-        }
+-        if (lexer.save() === lexerLocation) {
+-            maxStaleIterations -= 1;
+-        }
+-        else {
+-            lexerLocation = lexer.save();
+-            maxStaleIterations = 10;
+-        }
+-        return advance();
+     }
++
+     function finish() {
+         context.exitTo('document');
+         context.exit('document');
+diff --git a/node_modules/orga/dist/tokenize/index.js b/node_modules/orga/dist/tokenize/index.js
+index ed966e0..ba52f8b 100644
+--- a/node_modules/orga/dist/tokenize/index.js
++++ b/node_modules/orga/dist/tokenize/index.js
+@@ -59,7 +59,7 @@ export const tokenize = (text, options) => {
+     const peek = (offset = 0) => {
+         const pos = cursor + offset;
+         if (pos >= tokens.length) {
+-            tokens = tokens.concat(tok());
++            for (const token of tok()) tokens.push(token);
+         }
+         return tokens[pos];
+     };
+@@ -103,7 +103,7 @@ export const tokenize = (text, options) => {
+             let _all = [];
+             let tokens = tok();
+             while (tokens.length > 0) {
+-                _all = _all.concat(tokens);
++                for (const token of tokens) _all.push(token);
+                 tokens = tok();
+             }
+             return _all;

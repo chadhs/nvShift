@@ -1,0 +1,162 @@
+{
+  "name": "nvshift",
+  "version": "0.1.0",
+  "description": "Notational Velocity for everyone.",
+  "author": "Chad Stovern",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "npm run build && node scripts/start.mjs",
+    "start": "node scripts/start.mjs",
+    "build": "vite build && node scripts/build-analysis.mjs",
+    "test": "node --test test/*.test.js",
+    "test:smoke": "npm run build && node scripts/smoke.mjs",
+    "check": "npm test && npm run build",
+    "dist:mac": "npm run prepare:electron && npm run build && electron-builder --mac --publish never",
+    "dist:linux": "npm run prepare:electron && npm run build && electron-builder --linux --publish never",
+    "pack": "npm run prepare:electron && npm run build && electron-builder --dir",
+    "notices": "node scripts/notices.mjs",
+    "icons": "node scripts/icons.mjs",
+    "checksums": "node scripts/checksums.mjs",
+    "postinstall": "patch-package --error-on-fail",
+    "dist:win": "npm run prepare:electron && npm run build && electron-builder --win --x64 --publish never",
+    "test:benchmark": "node scripts/benchmark.mjs",
+    "prepare:electron": "node node_modules/electron/install.js",
+    "test:package:mac": "node scripts/verify-mac.mjs"
+  },
+  "build": {
+    "appId": "com.chadhs.nvshift",
+    "productName": "nvShift",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "LICENSE",
+      "README.org",
+      "THIRD-PARTY-NOTICES.org",
+      "assets/icon.svg",
+      "build/tray*.png",
+      "docs/PROVENANCE.org"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "identity": "-",
+      "icon": "build/icon.icns",
+      "artifactName": "nvshift-${version}-${arch}.${ext}",
+      "hardenedRuntime": true,
+      "strictVerify": true
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "category": "Office",
+      "executableName": "nvshift",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "com.chadhs.nvshift",
+          "Name": "nvShift",
+          "GenericName": "Notes editor",
+          "Keywords": "notes;Markdown;org-mode;text;editor;",
+          "Terminal": "false"
+        }
+      },
+      "icon": "build/icons",
+      "syncDesktopName": true,
+      "executableArgs": [],
+      "description": "Search, create, and edit local text, Markdown, and Org notes",
+      "artifactName": "nvshift-${version}.${ext}"
+    },
+    "extraResources": [
+      {
+        "from": "build/icons/256x256.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "build",
+        "to": "tray",
+        "filter": [
+          "tray*.png"
+        ]
+      },
+      {
+        "from": "node_modules/electron/dist/LICENSE",
+        "to": "licenses/Electron-LICENSE.txt"
+      },
+      {
+        "from": "node_modules/electron/dist/LICENSES.chromium.html",
+        "to": "licenses/LICENSES.chromium.html"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "nvshift-${version}-win-${arch}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true,
+      "shortcutName": "nvShift",
+      "deleteAppDataOnUninstall": false
+    }
+  },
+  "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/search": "6.7.2",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@lezer/highlight": "1.2.5",
+    "@replit/codemirror-vim": "6.4.0",
+    "chokidar": "6.0.0",
+    "codemirror": "6.0.2",
+    "dompurify": "3.4.17",
+    "github-slugger": "2.0.0",
+    "highlight.js": "11.12.0",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-frontmatter": "2.0.1",
+    "mdast-util-gfm": "3.1.0",
+    "mermaid": "11.17.2",
+    "micromark-extension-frontmatter": "2.0.0",
+    "micromark-extension-gfm": "3.0.0",
+    "minisearch": "7.2.0",
+    "orga": "4.7.1",
+    "smol-toml": "1.9.1",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "patch-package": "8.0.1",
+    "vite": "^8.2.2"
+  },
+  "desktopName": "com.chadhs.nvshift.desktop",
+  "overrides": {
+    "text-kit": "4.5.1",
+    "katex": "0.19.1"
+  }
+}

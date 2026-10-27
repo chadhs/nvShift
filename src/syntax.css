@@ -1,0 +1,13 @@
+.code-block .hljs-comment, .code-block .hljs-quote { color: var(--syntax-comment); font-style: italic; }
+.code-block .hljs-keyword, .code-block .hljs-selector-tag { color: var(--syntax-keyword); }
+.code-block .hljs-string, .code-block .hljs-regexp, .code-block .hljs-doctag { color: var(--syntax-string); }
+.code-block .hljs-number, .code-block .hljs-literal, .code-block .hljs-symbol, .code-block .hljs-bullet { color: var(--syntax-number); }
+.code-block .hljs-title, .code-block .hljs-section, .code-block .hljs-name, .code-block .hljs-selector-id, .code-block .hljs-selector-class { color: var(--syntax-title); }
+.code-block .hljs-variable, .code-block .hljs-template-variable, .code-block .hljs-type, .code-block .hljs-built_in, .code-block .hljs-attr, .code-block .hljs-attribute { color: var(--syntax-variable); }
+.code-block .hljs-meta, .code-block .hljs-selector-pseudo { color: var(--syntax-meta); }
+.code-block .hljs-subst, .code-block .hljs-params { color: var(--ink); }
+.code-block .hljs-addition { color: var(--syntax-string); background: var(--green-wash); }
+.code-block .hljs-deletion { color: var(--syntax-variable); background: var(--accent-wash); }
+.code-block .hljs-emphasis { font-style: italic; }
+.code-block .hljs-strong { font-weight: 700; }
+.code-block .hljs-link { color: var(--syntax-title); text-decoration: underline; }

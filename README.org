@@ -1,0 +1,206 @@
+#+title: nvShift
+#+subtitle: Notational Velocity for everyone.
+
+nvShift is a keyboard-driven desktop notes editor for macOS, Linux, and Windows.
+Search your notes, create one from the same field, and start writing. Notes are
+ordinary UTF-8 files in a folder you choose. Markdown and Org previews display
+images and Mermaid diagrams. Vim editing is optional.
+
+The project is an initial MVP. Native validation results and outstanding platform
+checks are recorded in [[file:docs/VALIDATION.org][the validation record]].
+
+* Run locally
+Use Node 24 and npm. From this repository:
+#+begin_src sh
+npm ci
+npm run dev
+#+end_src
+Choose a notes folder on first launch. nvShift remembers it. Existing files stay
+in place; new notes are created at that folder's root. nvShift searches subfolders
+but excludes hidden directories, =assets=, =node_modules=, and symbolic links.
+
+To open a particular library from the command line:
+#+begin_src sh
+npm start -- --library=/absolute/path/to/notes
+#+end_src
+
+* Find or create a note
+Type in the search field to find matching filenames and contents. Search is
+case-insensitive, matches word prefixes, and requires every query term. Exact
+titles rank first, followed by other title matches and content matches. An empty
+search shows recently modified notes. Results show their relative folder when
+needed to distinguish names.
+
+Use Up and Down to select a result, then Enter to edit it. A separate Create
+result creates a note using the current query as its title. =Cmd/Ctrl+Enter=
+creates directly. Choose the extension beside the search field. Filename
+validation and exclusive creation prevent replacing an existing note.
+
+| Shortcut | Action |
+|----------+--------|
+| Cmd/Ctrl+L | Focus library search |
+| Cmd/Ctrl+Enter | Create a note from the search text |
+| Cmd/Ctrl+F | Find in the current document |
+| Cmd/Ctrl+S | Save now |
+| Cmd/Ctrl+Shift+P | Cycle Editor, Split, and Preview |
+| Cmd/Ctrl+W | Save and hide the window |
+| Cmd/Ctrl+Shift+Space | Raise nvShift and focus search, configurable |
+
+Rename a note in its current folder, reveal it in your file manager, or move it
+to the OS trash. Rename changes its filename only; links in other notes are not
+rewritten. If the OS trash operation fails, nvShift reports the error and keeps
+the note.
+
+* File extension and content syntax
+The default new-note extension is =.md=. Change it in Settings or choose another
+extension when creating a note.
+
+| Extension | Content syntax |
+|-----------+----------------|
+| .md, .markdown | Markdown |
+| .org | Org |
+| .txt | Plain text, Markdown, or Org, selected in Settings |
+
+The =.txt content= setting applies to all =.txt= notes in the selected library,
+including existing files. It defaults to plain text and is independent of the
+default new-note extension. Changing it changes highlighting, preview, and image
+link insertion. It never rewrites or renames files or adds format metadata.
+
+Editor, Split, and Preview views share the current note. The editor starts in
+source mode with wrapping, undo/redo, and document search. Preview follows
+unsaved edits. Markdown and Org use the same bounded rendering implementation as
+MarkupPreview; plain text displays literally.
+
+* Vim mode
+Enable Vim mode in Settings. It starts off. Toggling it preserves text and undo
+history. Normal, Insert, and Visual editing use CodeMirror's Vim extension.
+=:w= saves the current note. Escape follows Vim semantics while editing;
+=Cmd/Ctrl+L= returns to library search.
+
+This is Vim-style editing, not an embedded Neovim process. Neovim plugins and
+configuration files are not loaded.
+
+* Images and diagrams
+Paste an image into the editor or drop supported image files there. Clipboard
+images are saved as PNG; dropped files keep their format. nvShift copies images
+into the library's =assets/= directory using unique filenames and inserts a path
+relative to the note, including notes in subfolders.
+
+Markdown syntax inserts an image link, Org inserts an Org file link, and plain
+text inserts the path as text. Deleting a note or removing a link does not delete
+its image assets. Asset cleanup is manual in this MVP.
+
+Local image links and HTTP/HTTPS images display in the preview. Remote images
+contact their hosts; requests omit cookies, authentication, and document
+referrers. Local notes are not uploaded. Missing images show an explanation
+without stopping editing. PNG, JPEG, GIF, WebP, and SVG are supported within the
+renderer limits. SVG displays as an image without running scripts.
+
+Markdown =mermaid= fences and Org =#+begin_src mermaid= blocks render locally.
+No Mermaid CLI or Emacs installation is needed. Invalid or slow diagrams keep
+their source available. Diagram code does not execute scripts or write files.
+
+The inherited preview limits include 16 MiB per note, 8 MiB per image, a 32 MiB
+image budget and 100 image links per note, and 20 Mermaid diagrams per note.
+Other parser and diagram limits bound processing work. Large or unsupported
+inputs produce an error rather than altering their source.
+
+* Appearance
+Appearance follows MarkupPreview's options and palettes:
+
+| Setting | Choices | Default |
+|---------+---------+---------|
+| Mode | System, Light, Dark | System |
+| Light theme | Default Light, Solarized Light | Default Light |
+| Dark theme | Default Dark, Solarized Dark | Default Dark |
+| Preview headings | Original serif, Sans-serif | Original serif |
+| Preview width | Reading, Full width | Reading |
+
+Light and dark theme choices persist independently. System mode follows the
+operating system. Colors apply to the title bar, search results, settings,
+editor, syntax highlighting, preview, and diagrams. Heading font and reading
+width affect the preview. Changing appearance preserves editor state. Zoom is
+available through the View menu.
+
+* Quick access and closing
+The default global shortcut is =Cmd/Ctrl+Shift+Space=. Change it in Settings if
+another application uses it. A registration failure is shown in the app; opening
+nvShift again also raises its existing window.
+
+Closing the window keeps nvShift running. The menu-bar or tray icon provides
+Open, Settings, and Quit. Quit saves pending changes before exiting. Automatic
+startup at login is not included.
+
+On Linux Wayland, global shortcuts depend on the desktop's GlobalShortcuts
+portal. The installed launcher uses =com.chadhs.nvshift.desktop= to match the
+application's portal identity. The desktop may ask for shortcut permission or
+provide its own shortcut settings. Use tray access or relaunch the app when a
+shortcut is unavailable. Xvfb CI checks do not substitute for a real Wayland
+session check.
+
+* Saving, external editors, and recovery
+nvShift autosaves after a short typing pause and flushes changes when switching
+notes, hiding the window, or quitting. Save status distinguishes pending saves,
+saved content, conflicts, and errors. Existing UTF-8 BOM and newline conventions
+are preserved. Invalid UTF-8 and over-limit files are rejected without changes.
+
+You can use another editor on the same files. Clean notes reload outside changes.
+If an outside edit conflicts with an unsaved buffer, nvShift pauses autosave and
+preserves both versions. Keep both saves the editor version as a separate note;
+Use disk reloads the disk version while retaining the draft in recovery storage.
+Outside deletion does not discard unsaved text.
+
+Recovery snapshots live in nvShift's application-data directory, separate from
+the notes folder and MarkupPreview's preferences. Journaled unsaved drafts are
+checked on restart. Abrupt process or machine failure can lose edits that have
+not reached the journal. Recovery is not a replacement for backing up the notes
+folder. Existing cloud-folder synchronization remains the responsibility of its
+provider; nvShift has no custom sync service.
+
+* Development and local packages
+#+begin_src sh
+npm test                 # Unit and integration checks
+npm run build            # Renderer and standalone analysis bundles
+npm run check            # Tests and build
+npm run test:benchmark   # Search benchmark against 10,000 notes
+npm run test:smoke       # Electron desktop smoke checks
+npm run test:package:mac # Extract ZIP, run packaged smoke, verify DMG and signatures
+npm run icons            # Rebuild original app and tray icon assets
+npm run notices          # Validate runtime licenses and regenerate notices
+npm run notices -- --check # Verify that generated notices are current
+npm run pack             # Unpacked application for local checks
+npm run dist:mac          # Ad-hoc-signed DMG and ZIP
+npm run dist:linux        # AppImage and tar.gz
+npm run dist:win          # Unsigned per-user Windows NSIS installer
+npm run checksums        # SHA-256 checksums for packages in release/
+#+end_src
+
+Build native packages and run native smoke tests on each target platform.
+On Linux, run desktop smoke checks with =xvfb-run --auto-servernum= when no display
+is available. =NVSHIFT_EXECUTABLE= lets the smoke runner target a packaged
+executable. =scripts/check-package.mjs= checks packaged identity, required files,
+and license notices. The Windows installer lifecycle helper is restricted to a
+disposable GitHub Actions runner.
+
+The prepared workflow under =.github/workflows/= tests and builds artifacts. It
+has read-only repository permissions and no release or publishing step. This
+repository is local until a remote is deliberately configured. Native Linux,
+Windows, installer, and Wayland checks remain pending until actually executed;
+package configuration alone does not validate those systems.
+
+Developer signing certificates, macOS notarization, Windows code signing,
+automatic updates, TextBundle/TextPack, rich-text editing, and full Emacs Org
+functionality are outside this MVP.
+
+* License and provenance
+nvShift's own code and original icons are BSD-3-Clause, copyright Chad Stovern.
+Third-party components keep their licenses. DOMPurify is used under its
+Apache-2.0 option. The notices generator checks runtime dependencies and rejects
+unidentified or GPL/AGPL/LGPL requirements before producing the inventory.
+Electron's bundled component notices are preserved with packaged applications.
+
+Preview, parser patches, appearance colors, resource handling, and associated
+tests originate from MarkupPreview v0.12.0 at commit
+=4dccff949272ead4d2813d6df7cb07fe6d127779=. See
+[[file:docs/PROVENANCE.org][provenance]] and [[file:THIRD-PARTY-NOTICES.org][third-party notices]].
+The interaction model is inspired by nvAlt. Its source was not copied.

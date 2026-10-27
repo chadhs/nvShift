@@ -1,0 +1,120 @@
+name: Desktop checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    name: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run icons
+      - name: Validate licenses and generate target-platform notices
+        run: npm run notices
+      - run: npm run check
+      - run: npm run test:benchmark
+      - name: Desktop smoke test
+        if: runner.os != 'Linux'
+        run: npm run test:smoke
+      - name: Desktop smoke test on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run test:smoke
+      - name: Package macOS app with ad-hoc signing
+        if: runner.os == 'macOS'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_FOR_PULL_REQUEST: 'true'
+        run: env -u CSC_LINK -u CSC_KEY_PASSWORD -u CSC_NAME npm run dist:mac -- -c.mac.identity=- -c.mac.notarize=false
+      - name: Package Linux app
+        if: runner.os == 'Linux'
+        run: npm run dist:linux
+      - name: Package unsigned Windows app
+        if: runner.os == 'Windows'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist:win
+      - name: Verify and smoke test macOS ZIP
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          directory="$RUNNER_TEMP/nvshift-packaged"
+          mkdir -p "$directory"
+          ditto -xk release/*.zip "$directory"
+          app="$directory/nvShift.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          node scripts/check-package.mjs mac "$app"
+          NVSHIFT_EXECUTABLE="$app/Contents/MacOS/nvShift" node scripts/smoke.mjs
+      - name: Verify macOS DMG app signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mountpoint="$RUNNER_TEMP/nvshift-dmg"
+          mkdir -p "$mountpoint"
+          images=(release/*.dmg)
+          test "${#images[@]}" -eq 1
+          hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" "${images[0]}"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          codesign --verify --deep --strict --verbose=2 "$mountpoint/nvShift.app"
+      - name: Verify Linux AppImage launcher and payload
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y desktop-file-utils
+          directory="$RUNNER_TEMP/nvshift-appimage"
+          mkdir -p "$directory"
+          cd "$directory"
+          images=("$GITHUB_WORKSPACE"/release/*.AppImage)
+          test "${#images[@]}" -eq 1
+          "${images[0]}" --appimage-extract > /dev/null
+          desktop-file-validate squashfs-root/com.chadhs.nvshift.desktop
+          cd "$GITHUB_WORKSPACE"
+          node scripts/check-package.mjs linux "$directory/squashfs-root"
+      - name: Verify and smoke test Linux tarball
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          directory="$RUNNER_TEMP/nvshift-packaged"
+          mkdir -p "$directory"
+          tar -xzf release/*.tar.gz -C "$directory"
+          mapfile -t executables < <(find "$directory" -type f -name nvshift)
+          test "${#executables[@]}" -eq 1
+          node scripts/check-package.mjs linux "$(dirname "${executables[0]}")"
+          NVSHIFT_EXECUTABLE="${executables[0]}" xvfb-run --auto-servernum node scripts/smoke.mjs
+      - name: Verify Windows installer lifecycle
+        if: runner.os == 'Windows'
+        run: ./scripts/check-windows-installer.ps1
+      - run: npm run checksums
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nvshift-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.tar.gz
+            release/*-win-x64-setup.exe
+            release/SHA256SUMS-*.txt
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: screenshots-${{ runner.os }}
+          path: test-results/*.png
+          if-no-files-found: ignore

@@ -1,0 +1,79 @@
+#+title: Your words, in Org.
+#+subtitle: A quiet place to read what you've been writing.
+#+author: The markup-preview notebook
+#+date: 2026-09-13
+#+tags[]: org-mode notes
+#+draft: false
+
+* Make yourself at home
+:PROPERTIES:
+:CUSTOM_ID: welcome
+:END:
+Org is plain text with a little structure. Headings begin with stars,
+links keep their labels close, and a list is just a list. It works in
+Emacs, in your favorite editor, and on the back of an envelope.
+
+This is *markup-preview*: a live reader for your Org and Markdown files. Open a file,
+keep writing in your editor, and watch this page follow along when you save.
+
+#+begin_quote
+The file is yours. The editor is your choice.
+#+end_quote
+
+* A small plan for today
+- [X] Find a comfortable place to write
+- [X] Open this notebook in markup-preview
+- [ ] Put a thought into words
+  - A sentence is a perfectly good start.
+- [ ] Save the file and see the preview update
+
+** TODO Follow a thread :writing:
+Try *bold*, /italic/, _underline_, +a change of mind+, or =a bit of code=.
+The [[https://orgmode.org/guide/][Org mode guide]] has more to explore.
+
+** DONE Leave room for later :notes:
+You can navigate with the outline on the left, find a word in the toolbar,
+or switch to Source to read the original file.
+
+* A table, without the ceremony
+| What you write | What you get       |
+|----------------+--------------------|
+| * Heading      | A place in the outline |
+| TODO / DONE    | A visible task state   |
+| A saved change | An updated preview     |
+| Plain text     | A file you can keep    |
+
+* Code stays code
+Programming-language source blocks display as text. Babel code never runs.
+
+#+begin_src emacs-lisp
+(defun a-little-room-to-think ()
+  "Start with an empty buffer."
+  (switch-to-buffer (get-buffer-create "notes.org"))
+  (org-mode))
+#+end_src
+
+* A diagram in plain text
+Mermaid blocks render offline and follow your appearance theme. Expand
+*Show source* to see how this flowchart is written.
+
+#+begin_src mermaid
+flowchart LR
+  Write --> Save
+  Save --> Preview
+  Preview --> Write
+#+end_src
+
+* Bring your own notebook
+Use the Open file button, drop several =.org= files onto this window, or launch
+from the terminal with file paths. Each file opens in its own tab. Edit it elsewhere and save. The preview
+keeps its scroll position as your document changes.
+
+#+begin_src sh
+npm run dev -- ~/notes/today.org ~/notes/project.org
+#+end_src
+
+Switch tabs with =Ctrl+Tab= or =Ctrl+Shift+Tab=. Each tab remembers your place.
+Local images display inline. Links to other Org and Markdown documents open
+in tabs. Try [[file:welcome.md#code-and-diagrams][the Markdown notebook]].
+Math rendering and full Emacs export compatibility remain outside this release.

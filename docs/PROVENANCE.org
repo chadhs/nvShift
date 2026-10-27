@@ -1,0 +1,11 @@
+#+title: Preview code provenance
+
+nvShift includes preview, resource handling, parsing patches, themes, and tests
+adapted from Chad Stovern's markup-preview v0.12.0.
+
+Source: https://github.com/chadhs/markup-preview
+Commit: 4dccff949272ead4d2813d6df7cb07fe6d127779
+License: BSD-3-Clause. Dependency licenses are retained in THIRD-PARTY-NOTICES.org.
+
+The copied code is maintained here independently. nvShift does not depend on a
+sibling checkout. nvAlt inspired the interaction model; its source was not copied.

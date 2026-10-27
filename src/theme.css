@@ -1,0 +1,37 @@
+:root { color-scheme: light; --primary-ink: #fff; --search-wash: #ead597; --search-ink: #292c26; --search-active-wash: #bc633a; --search-active-ink: #fff; --paper: #fcfbf8; --chrome: #f5f4ef; --ink: #30332f; --muted: #7b7e75; --line: #e6e5dd; --line-strong: #cfcec3; --inset: #eeede6; --hover: #e9e8df; --accent: #a35032; --accent-hover: #874129; --accent-wash: #f3e9df; --green: #63816c; --green-wash: #e8eee7; --code: #f5f4ef; }
+:root[data-theme='dark'] { color-scheme: dark; --paper: #202523; --chrome: #1b201e; --ink: #e2e4db; --muted: #9ba69e; --line: #343d37; --line-strong: #4d5b52; --inset: #2a312d; --hover: #303a33; --accent: #dfa383; --accent-hover: #c38b6e; --accent-wash: #373029; --green: #91b39a; --green-wash: #2b382d; --code: #1b211d; }
+/* Solarized base colors: https://ethanschoonover.com/solarized/ */
+:root[data-theme='solarized-light'] {
+  color-scheme: light;
+  --paper: #fdf6e3; --chrome: #eee8d5; --ink: #657b83; --muted: #586e75;
+  --line: #d9d7c6; --line-strong: #93a1a1; --inset: #eee8d5; --hover: #e3dfcc;
+  --accent: #268bd2; --accent-hover: #227fbe; --accent-wash: #e4e9df;
+  --green: #859900; --green-wash: #e9e8c7; --code: #eee8d5;
+  --primary-ink: #002b36;
+  --search-wash: #eee8d5; --search-ink: #002b36;
+  --search-active-wash: #b58900; --search-active-ink: #002b36;
+}
+:root[data-theme='solarized-dark'] {
+  color-scheme: dark;
+  --paper: #002b36; --chrome: #073642; --ink: #839496; --muted: #93a1a1;
+  --line: #214650; --line-strong: #586e75; --inset: #073642; --hover: #16434e;
+  --accent: #268bd2; --accent-hover: #369bdf; --accent-wash: #073b50;
+  --green: #859900; --green-wash: #243d2b; --code: #073642;
+  --primary-ink: #002b36;
+  --search-wash: #586e75; --search-ink: #fdf6e3;
+  --search-active-wash: #b58900; --search-active-ink: #002b36;
+}
+
+/* Syntax colors share the active document palette. */
+:root {
+  --syntax-comment: var(--muted); --syntax-keyword: #7d5084; --syntax-string: #52705b;
+  --syntax-number: #986032; --syntax-title: #326d86; --syntax-variable: #8f4735; --syntax-meta: #766827;
+}
+:root[data-theme='dark'] {
+  --syntax-keyword: #c7a1cd; --syntax-string: #9abc91; --syntax-number: #e2af77;
+  --syntax-title: #8fbed2; --syntax-variable: #dfa383; --syntax-meta: #d2c481;
+}
+:root[data-theme='solarized-light'], :root[data-theme='solarized-dark'] {
+  --syntax-keyword: #859900; --syntax-string: #2aa198; --syntax-number: #d33682;
+  --syntax-title: #268bd2; --syntax-variable: #cb4b16; --syntax-meta: #b58900;
+}

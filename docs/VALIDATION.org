@@ -1,0 +1,55 @@
+#+title: nvShift MVP validation
+
+Checks executed on macOS arm64, 2026-10-26, using Node 24.21.0 and Electron 44.9.3.
+All desktop fixtures use temporary notes and an isolated application profile.
+
+* Executed checks
+| Check | Result | Evidence |
+|-------+--------+----------|
+| Unit/integration suite | Passed | npm test; 116 tests, zero failures |
+| Search benchmark | Passed | 10,000 notes, 2107 average source bytes; 801.85 ms indexing; 12.95 ms median and 20.8 ms p95 search, below 100 ms target |
+| Renderer/analysis build | Passed | npm run build; Vite renderer, browser workers, and standalone Node analyzer |
+| macOS development smoke | Passed | npm run test:smoke |
+| macOS packaged smoke | Passed | npm run test:package:mac; extracted ZIP executable tested outside the repository |
+| macOS DMG/ZIP identity and signatures | Passed | Ad-hoc codesign verification, mounted DMG inspection, check-package.mjs |
+| JavaScript runtime license inventory | Passed | 215 installed runtime packages; no unidentified or GPL/AGPL/LGPL requirement; DOMPurify Apache-2.0 option selected |
+| Notice reproducibility | Passed | node scripts/notices.mjs --check |
+| Runtime dependency audit | Passed | npm audit --omit=dev; zero reported advisories |
+| Original icons | Passed | SVG source, ICNS, ICO, PNG, and tray assets generated and visually inspected |
+| Source whitespace check | Passed | git diff --cached --check; patch-context whitespace preserved through .gitattributes |
+
+The raw deterministic search benchmark is recorded in [[file:benchmark.json][benchmark.json]].
+Its p95 result measures the search engine after indexing; it does not include
+cold filesystem discovery or UI input debounce.
+
+* Desktop scenarios exercised
+- First launch, folder-picker wiring with a stubbed native selection, cancellation,
+  folder changes, and per-library syntax preferences.
+- Recursive prefix search, duplicate titles, keyboard creation and immediate Enter,
+  source editing, rename, and restart persistence.
+- Vim toggle, Normal/Insert editing, :w, undo, all four themes, heading font,
+  content width, and all three .txt syntax selections without rewriting files.
+- Local and remote images, synthetic clipboard image paste without changing the
+  system clipboard, native file-backed drops, Mermaid, inert raw HTML, and sandbox.
+- Outside saves and conflicts, Keep both, close-to-background with pending edits,
+  single-instance reopening, shortcut registration failure handling, and renderer
+  view reconstruction from main-owned buffers.
+
+Backend tests separately cover actual subprocess crash-journal recovery,
+Use disk, outside deletion, injected write failures, save races, UTF-8/BOM/EOL
+preservation, path safety, portable filename collisions, and parser/resource limits.
+The system Trash callback is verified through injected test operations; manual
+native Trash behavior remains a platform check.
+
+* Pending native checks
+| Platform | Status | Required checks |
+|----------+--------+-----------------|
+| Linux X11 | Pending | Native smoke, AppImage launcher, tarball smoke, tray, physical global shortcut |
+| Linux Wayland | Pending | Installed reverse-DNS launcher, portal shortcut consent/conflict/relaunch behavior, tray availability |
+| Windows | Pending | Native smoke, NSIS install/reinstall/uninstall, packaged smoke, preferences retained |
+| macOS Intel | Pending | Native x64 build and smoke; current artifacts are arm64 |
+| macOS physical integration | Pending | Shortcut while another app has focus, occupied shortcut in another process, native folder picker interaction and system Trash |
+
+The prepared read-only CI workflow can execute Linux Xvfb, Windows, and macOS
+package checks after hosting is configured. No remote or public release was
+created. Wayland and physical shortcut checks require an interactive desktop.

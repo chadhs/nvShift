@@ -1,0 +1,50 @@
+diff --git a/node_modules/text-kit/lib/core.js b/node_modules/text-kit/lib/core.js
+index a796be6..69632eb 100644
+--- a/node_modules/text-kit/lib/core.js
++++ b/node_modules/text-kit/lib/core.js
+@@ -79,9 +79,14 @@ function core(text) {
+ 	function toPoint(index) {
+ 		if (index <= 0) return { line: 1, column: 1, offset: 0 }
+ 		if (index >= text.length) return eof()
+-		let lineIndex = lines.findIndex((l) => l > index)
+-		if (lineIndex < 0) {
+-			lineIndex = lines.length
++		// Find the first line start after index without scanning every line
++		// for each character read from a large document.
++		let lineIndex = 0
++		let high = lines.length
++		while (lineIndex < high) {
++			const middle = Math.floor((lineIndex + high) / 2)
++			if (lines[middle] <= index) lineIndex = middle + 1
++			else high = middle
+ 		}
+ 
+ 		return {
+diff --git a/node_modules/text-kit/lib/reader.js b/node_modules/text-kit/lib/reader.js
+index 9bf6b0c..f0ebc54 100644
+--- a/node_modules/text-kit/lib/reader.js
++++ b/node_modules/text-kit/lib/reader.js
+@@ -10,6 +10,10 @@
+ 
+ import enhance from './utils/index.js'
+ 
++// Range readers share an immutable core. Reuse its position helpers instead
++// of rebuilding them for every inline token probe.
++const enhancedCores = new WeakMap()
++
+ /**
+  * @type {Record<string,string>}
+  */
+@@ -31,7 +35,11 @@ const PAIRS = [
+  * @param {Partial<Range>} [range={}]
+  */
+ function reader(_core, range = {}) {
+-	const core = enhance(_core)
++	let core = enhancedCores.get(_core)
++	if (!core) {
++		core = enhance(_core)
++		enhancedCores.set(_core, core)
++	}
+ 
+ 	let cursor = core.toIndex(range.start || 0)
+ 	const end = core.toIndex(range.end || Infinity)
