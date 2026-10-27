@@ -131,12 +131,27 @@ export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFil
       states.set(doc.id, view.state);
     } finally { applying = false; }
   }
+  function focusEditor() {
+    view.focus();
+    // macOS can clear the native range when an HTML dialog returns focus while
+    // CodeMirror still has its cached range. Restore through public DOM mapping
+    // so the next selectionchange cannot collapse the saved editor selection.
+    const { anchor, head } = view.state.selection.main;
+    const start = view.domAtPos(anchor), end = view.domAtPos(head);
+    view.dom.ownerDocument.getSelection()?.setBaseAndExtent(start.node, start.offset, end.node, end.offset);
+  }
   return {
     view,
     openDocument,
+    selectionBookmark: () => ({ id: currentId, source: view.state.doc.toString(), selection: view.state.selection, focused: view.hasFocus }),
+    restoreSelection(bookmark) {
+      if (!bookmark || bookmark.id !== currentId || bookmark.source !== view.state.doc.toString()) return;
+      view.dispatch({ selection: bookmark.selection, annotations: Transaction.addToHistory.of(false) });
+      if (bookmark.focused) focusEditor();
+    },
     updateSettings: applySettings,
     source: () => view.state.doc.toString(),
-    focus: () => view.focus(),
+    focus: focusEditor,
     find: () => { openSearchPanel(view); view.dom.querySelector('.cm-search input')?.focus(); },
     insert: (text) => { view.dispatch(view.state.replaceSelection(text), { scrollIntoView: true }); view.focus(); },
     destroy: () => { view.destroy(); states.clear(); },

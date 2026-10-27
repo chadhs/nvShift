@@ -37,6 +37,7 @@ let navigationQueue = Promise.resolve();
 let settingsQueue = Promise.resolve();
 let settingsVersion = 0;
 let pendingSettings = 0;
+let settingsBookmark = null, pendingSettingsBookmark = null;
 let switchingLibrary = false;
 let previewTimer;
 let previewGeneration = 0;
@@ -634,10 +635,19 @@ async function insertDroppedImages(files, targetId = current?.id) {
   });
 }
 function openSettings(focus = '#appearance-mode') {
-  if (!$('#settings-dialog').open) $('#settings-dialog').showModal();
+  if (!$('#settings-dialog').open) {
+    settingsBookmark = pendingSettingsBookmark && performance.now() - pendingSettingsBookmark.at < 1000
+      ? pendingSettingsBookmark.value : editor.selectionBookmark();
+    pendingSettingsBookmark = null;
+    $('#settings-dialog').showModal();
+  }
   requestAnimationFrame(() => $(focus)?.focus());
 }
-function closeSettings() { $('#settings-dialog').close(); }
+async function closeSettings() {
+  let pending;
+  do { pending = settingsQueue; await pending.catch(() => {}); } while (pending !== settingsQueue);
+  $('#settings-dialog').close();
+}
 
 $('#dismiss-message').addEventListener('click', clearMessage);
 $('#choose-library').addEventListener('click', () => run(chooseLibrary()));
@@ -663,6 +673,14 @@ for (const button of $$('button[data-view]')) button.addEventListener('click', (
 $('#find-button').addEventListener('click', showFind);
 $('#appearance-button').addEventListener('click', () => openSettings());
 $('#settings-button').addEventListener('click', () => openSettings('#vim-mode'));
+for (const control of [$('#appearance-button'), $('#settings-button')]) control.addEventListener('pointerdown', () => {
+  pendingSettingsBookmark = { at: performance.now(), value: editor.selectionBookmark() };
+});
+$('#settings-dialog').addEventListener('close', () => {
+  const bookmark = settingsBookmark; settingsBookmark = null;
+  editor.restoreSelection(bookmark);
+});
+$('#settings-dialog').addEventListener('cancel', (event) => { event.preventDefault(); void closeSettings(); });
 $('#close-settings').addEventListener('click', closeSettings);
 $('#settings-done').addEventListener('click', closeSettings);
 for (const control of $$('[data-setting]')) control.addEventListener('change', () => run(updateSettings({ [control.dataset.setting]: control.type === 'checkbox' ? control.checked : control.value })));
