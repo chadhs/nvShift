@@ -348,13 +348,19 @@ try {
   // The global filename preference changes presentation while preserving the editor.
   await source().focus();
   await window.keyboard.press(`${modifier}+Home`);
-  await window.keyboard.press('Shift+End');
+  const selectedLine = headingSource.split('\n')[0];
+  await window.keyboard.down('Shift');
+  for (let index = 0; index < selectedLine.length; index++) await window.keyboard.press('ArrowRight');
+  await window.keyboard.up('Shift');
+  const selectedText = () => window.evaluate(() => getSelection()?.toString());
+  await expect.poll(selectedText).toBe(selectedLine);
   await setSetting('#filename-headings', true);
   await expect(window.locator('#note-title')).toHaveText('Headings');
   await expect(window.locator('#document-title')).toHaveText('Headings');
   await doneSettings();
   await expect(window.locator('#content h2')).toHaveText('Original heading 日本語');
   await source().focus();
+  await expect.poll(selectedText).toBe(selectedLine);
   await window.keyboard.insertText('Selection survived.');
   await expect.poll(buffer).toBe(headingSource.replace('An introduction before the title.', 'Selection survived.'));
   await window.keyboard.press(`${modifier}+z`);
