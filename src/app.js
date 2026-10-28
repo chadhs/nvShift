@@ -38,6 +38,8 @@ let settingsQueue = Promise.resolve();
 let settingsVersion = 0;
 let pendingSettings = 0;
 let settingsBookmark = null, pendingSettingsBookmark = null;
+let syntaxBookmark = null;
+let syntaxWrites = 0;
 let switchingLibrary = false;
 let previewTimer;
 let previewGeneration = 0;
@@ -191,6 +193,13 @@ function draftFor(doc) {
   }
   return entry;
 }
+function scheduleDraftMirror(entry, delay = 120) {
+  clearTimeout(entry.mirrorTimer);
+  entry.mirrorTimer = setTimeout(() => {
+    entry.mirrorTimer = null;
+    void mirrorDraft(entry, { force: false }).catch(reportError);
+  }, delay);
+}
 function changed(source) {
   if (!current) return;
   const entry = draftFor(current);
@@ -200,12 +209,17 @@ function changed(source) {
   current = { ...current, source, status: current.status === 'conflict' ? 'conflict' : 'dirty' };
   updateDocumentChrome();
   scheduleHeading();
-  void mirrorDraft(entry).catch(reportError);
+  if (current.extension === 'txt') scheduleDraftMirror(entry);
+  else void mirrorDraft(entry).catch(reportError);
   schedulePreview();
   scheduleSearch();
 }
-async function mirrorDraft(entry) {
-  if (entry.sending) return entry.sending;
+async function mirrorDraft(entry, { force = true } = {}) {
+  if (force) { clearTimeout(entry.mirrorTimer); entry.mirrorTimer = null; }
+  if (entry.sending) {
+    const doc = await entry.sending;
+    return force && entry.ackVersion < entry.version ? mirrorDraft(entry) : doc;
+  }
   if (entry.ackVersion >= entry.version) return entry.snapshot;
   entry.sending = (async () => {
     while (entry.ackVersion < entry.version) {
@@ -218,13 +232,19 @@ async function mirrorDraft(entry) {
       entry.snapshot = doc;
       entry.error = null;
       if (current?.id === entry.id) acceptDocument(doc, { fromMirror: true });
+      // A background mirror submits one coalesced snapshot. Typing during the
+      // request gets its own debounce; explicit flushes drain every revision.
+      if (!force) break;
     }
     return entry.snapshot;
   })().catch((reason) => {
     entry.error = reason;
     if (current?.id === entry.id) { current = { ...current, status: 'error', error: reason.message }; updateDocumentChrome(); }
     throw reason;
-  }).finally(() => { entry.sending = null; });
+  }).finally(() => {
+    entry.sending = null;
+    if (!entry.error && entry.ackVersion < entry.version && !entry.mirrorTimer) scheduleDraftMirror(entry);
+  });
   return entry.sending;
 }
 async function flushDrafts() {
@@ -242,7 +262,9 @@ function acceptDocument(doc, { fromMirror = false } = {}) {
   const hasNewerLocal = entry.version > serverVersion;
   if (Number.isFinite(current.revision) && Number.isFinite(doc.revision) && doc.revision < current.revision && !fromMirror) return;
   if (hasNewerLocal) {
-    current = { ...current, ...doc, source: entry.source, status: ['conflict', 'error'].includes(doc.status) ? doc.status : 'dirty' };
+    // A response for an older buffer must not lend its detected syntax to the
+    // text still being typed. Parsing waits for a complete mirrored snapshot.
+    current = { ...current, ...doc, source: entry.source, format: current.format, syntaxMode: current.syntaxMode, syntaxDetection: current.syntaxDetection, status: ['conflict', 'error'].includes(doc.status) ? doc.status : 'dirty' };
     updateDocumentChrome();
     scheduleHeading();
     return;
@@ -323,8 +345,24 @@ function updateDocumentChrome() {
   $('#note-folder').textContent = folder || 'NOTES';
   $('#note-path').textContent = current.name;
   $('#note-path').title = current.path;
-  $('#syntax-label').textContent = current.format === 'org' ? 'ORG' : current.format === 'markdown' ? 'MARKDOWN' : 'PLAIN TEXT';
-  $('#syntax-label').title = current.extension === 'txt' ? '.txt content syntax is set for this notes folder.' : `.${current.extension} file`;
+  const formatName = current.format === 'org' ? 'Org' : current.format === 'markdown' ? 'Markdown' : 'Plain text';
+  const isText = current.extension === 'txt';
+  $('#syntax-label').hidden = isText;
+  $('#syntax-label').textContent = formatName.toUpperCase();
+  $('#syntax-label').title = `.${current.extension} file`;
+  const syntax = $('#syntax-select');
+  syntax.hidden = !isText;
+  syntax.disabled = syntaxWrites > 0;
+  syntax.value = current.syntaxMode === 'fixed' ? 'auto' : current.syntaxMode || 'auto';
+  const entry = drafts.get(current.id);
+  const pending = isText && entry && entry.version > entry.ackVersion;
+  syntax.querySelector('[value="auto"]').textContent = `Automatic · ${pending ? 'Detecting…' : formatName}`;
+  syntax.title = current.syntaxWarning || (current.syntaxMode && current.syntaxMode !== 'auto'
+    ? 'Syntax selected for this note. Choose Automatic to detect its contents.'
+    : pending ? 'Checking this note’s current contents.'
+      : current.syntaxDetection === 'conflicting' ? 'Both Markdown and Org markers were found. Choose a syntax if needed.'
+        : current.syntaxDetection === 'ambiguous' ? 'No clear format markers. Using this note’s creation syntax, or plain text for an existing note.'
+        : 'Detected from this note’s contents. Choose a syntax if needed; your file contents stay the same.');
   $('#conflict-banner').hidden = current.status !== 'conflict';
   const names = { saved: 'Saved', saving: 'Saving…', dirty: 'Unsaved changes', conflict: 'External change · edits preserved', error: 'Save failed · edits preserved' };
   $('#save-status').textContent = names[current.status] || current.status || 'Ready';
@@ -353,10 +391,16 @@ function scheduleHeading(delay = 180) {
   clearTimeout(headingTimer);
   const generation = ++headingGeneration;
   headingRenderer.cancel();
-  if (!current || settings.filenameHeadings || current.format === 'plain' || headingMatches(current)) return;
-  const doc = { ...current };
+  if (!current || settings.filenameHeadings) return;
+  const id = current.id;
   headingTimer = setTimeout(async () => {
     try {
+      const entry = drafts.get(id);
+      if (entry) await mirrorDraft(entry);
+      if (generation !== headingGeneration || current?.id !== id || settings.filenameHeadings) return;
+      if (entry && entry.version > entry.ackVersion) { scheduleHeading(); return; }
+      const doc = entry?.snapshot ?? current;
+      if (doc.format === 'plain' || headingMatches(doc)) { updateHeadingChrome(); return; }
       const result = await headingRenderer.render(doc, { titleOnly: true });
       if (generation !== headingGeneration || current?.id !== doc.id || current?.name !== doc.name
         || current?.format !== doc.format || current?.source !== doc.source || settings.filenameHeadings) return;
@@ -364,7 +408,7 @@ function scheduleHeading(delay = 180) {
       updateHeadingChrome();
     } catch {
       // A parser failure cannot prevent writing or leave another note's title.
-      if (generation !== headingGeneration || current?.id !== doc.id) return;
+      if (generation !== headingGeneration || current?.id !== id) return;
       resolvedHeading = null;
       updateHeadingChrome();
     }
@@ -542,6 +586,26 @@ async function saveCurrent() {
   if (current?.id === id && doc) acceptDocument(doc);
 }
 
+async function setNoteSyntax(mode, bookmark) {
+  if (!current || current.extension !== 'txt') return;
+  const id = current.id;
+  const focused = document.activeElement, searchVersion = resultMoveVersion;
+  syntaxWrites++;
+  updateDocumentChrome();
+  try {
+    await navigate(async () => {
+      if (current?.id !== id) return;
+      const doc = await api.setSyntax(id, mode);
+      if (current?.id !== id) return;
+      acceptDocument(doc);
+      editor.restoreSelection(bookmark && { ...bookmark, focused: bookmark.focused && document.activeElement === focused && searchVersion === resultMoveVersion });
+    });
+  } finally {
+    syntaxWrites--;
+    updateDocumentChrome();
+  }
+}
+
 function schedulePreview(delay = 220) {
   clearTimeout(previewTimer);
   if (!current || settings.viewMode === 'editor') return;
@@ -622,6 +686,7 @@ async function insertImage(bytes, name, targetId = current?.id) {
   return navigate(async () => {
     if (current?.id !== targetId) throw new Error('Return to the original note and paste the image again.');
     const result = await api.insertImage(targetId, bytes, name);
+    if (current?.id !== targetId) throw new Error('The image was imported, but the active note changed before its link could be inserted.');
     editor.insert(result.text);
   });
 }
@@ -632,6 +697,7 @@ async function insertDroppedImages(files, targetId = current?.id) {
   return navigate(async () => {
     if (current?.id !== targetId) throw new Error('Return to the original note and drop the images again.');
     const result = await api.insertImagePaths(targetId, paths);
+    if (current?.id !== targetId) throw new Error('The images were imported, but the active note changed before their links could be inserted.');
     editor.insert(result.text);
   });
 }
@@ -672,6 +738,13 @@ $('#library-search').addEventListener('keydown', (event) => {
   }
 });
 $('#create-extension').addEventListener('change', () => { renderResults(); });
+$('#syntax-select').addEventListener('pointerdown', () => { syntaxBookmark = editor.selectionBookmark(); });
+$('#syntax-select').addEventListener('focus', () => { syntaxBookmark ??= editor.selectionBookmark(); });
+$('#syntax-select').addEventListener('change', (event) => {
+  const bookmark = syntaxBookmark ?? editor.selectionBookmark();
+  syntaxBookmark = null;
+  run(setNoteSyntax(event.target.value, bookmark));
+});
 for (const button of $$('button[data-view]')) button.addEventListener('click', () => run(setView(button.dataset.view)));
 $('#find-button').addEventListener('click', showFind);
 $('#appearance-button').addEventListener('click', () => openSettings());

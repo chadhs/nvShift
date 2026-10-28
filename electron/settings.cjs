@@ -38,7 +38,9 @@ function recoverSettings(value) {
   }
   return result;
 }
-/** Main-owned preferences. Library syntax preferences never modify note files. */
+/** Main-owned preferences. The existing txtSyntax key now seeds only newly
+ * created .txt notes, so v1 profiles migrate without losing their chosen default.
+ * Existing notes resolve their own syntax and are never rewritten by settings. */
 async function createSettings(userData) {
   const file = path.join(userData, 'settings.json');
   await fs.mkdir(userData, { recursive: true });

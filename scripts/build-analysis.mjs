@@ -48,6 +48,7 @@ try {
   await copyFile('dist/asset-references.cjs', references);
   execFileSync(process.execPath, ['-e', String.raw`
     const assert = require('node:assert/strict');
+    const fs = require('node:fs');
     const path = require('node:path');
     const { collectAssetReferences } = require(process.argv[1]);
     const assets = Array.from({ length: 130 }, (_, index) => ({
@@ -55,7 +56,17 @@ try {
       path: path.resolve('assets', 'asset-' + index + '.png'),
     }));
     const source = assets.map((asset) => '![Image](assets/' + asset.name + ')').join('\n\n');
-    collectAssetReferences({ path: path.resolve('Note.md'), format: 'markdown', source }, assets)
-      .then((ids) => assert.equal(ids.length, 130)).catch((error) => { console.error(error); process.exitCode = 1; });
+    (async () => {
+      assert.equal((await collectAssetReferences({ path: path.resolve('Note.md'), format: 'markdown', source }, assets)).length, 130);
+      fs.mkdirSync('assets');
+      const mixed = ['md.png', 'org.png', 'plain.png'].map((name) => {
+        const file = path.resolve('assets', name); fs.writeFileSync(file, 'fixture');
+        return { id: name, name, path: file };
+      });
+      const contents = '![MD](assets/%6Dd.png)\n[[file:assets/%6Frg.png]]\nassets/%70lain.png';
+      for (const format of ['plain', 'markdown', 'org']) {
+        assert.deepEqual((await collectAssetReferences({ path: path.resolve('Note.txt'), format, source: contents }, mixed)).sort(), ['md.png', 'org.png', 'plain.png']);
+      }
+    })().catch((error) => { console.error(error); process.exitCode = 1; });
   `, references], { stdio: 'inherit', cwd: directory });
 } finally { await rm(directory, { recursive: true, force: true }); }

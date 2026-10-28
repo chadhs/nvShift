@@ -128,6 +128,8 @@ export function releaseNotes({ version, repository, source, changes = '', runId 
     '',
     'Choose one notes folder; search discovers .txt, .md, .markdown, and .org files recursively. Directory links are followed, while hidden directories, node_modules, assets, and individual linked files are excluded. Editing, renaming, and trashing linked notes affect their real files.',
     '',
+    'Markdown, Org, and plain-text .txt notes can share a folder. nvShift detects each .txt note’s syntax from its contents; ambiguous or conflicting text displays as plain text. New .txt note syntax in Settings affects only future notes. The optional per-note syntax control corrects guesses, with choices stored locally across restart and in-app rename. Existing notes need no renaming, conversion, or inserted metadata.',
+    '',
     'The default global shortcut is Cmd/Ctrl+Shift+Space. Closing the window keeps nvShift running in the tray/menu bar; Quit flushes pending edits and exits. Remote images contact their hosts without cookies, authentication, or document referrers. Local notes are not uploaded.',
     '',
     'Use File → Find unused assets to review images in the selected library’s assets folder. Removal is manual and uses OS Trash. Current notes, drafts, and session Undo references are protected; images used only by older backups are listed separately. References in unrelated outside notes cannot be established.',

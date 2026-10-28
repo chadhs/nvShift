@@ -25,7 +25,8 @@ Directory symlinks and Windows directory junctions are followed, including links
 to folders outside the selected library. Each real note appears once, with its
 route through your library shown in results. Ordinary library paths take
 precedence over linked aliases. Notes reached through links use this library's
-file-format preferences, including its =.txt= syntax setting.
+creation preferences. Existing linked =.txt= notes detect syntax independently,
+just like notes stored directly in the library.
 
 Editing, renaming, and trashing a linked note affect the real file. New notes
 still start in the library root. Links can be nested; cycles do not duplicate
@@ -116,12 +117,29 @@ extension when creating a note.
 |-----------+----------------|
 | .md, .markdown | Markdown |
 | .org | Org |
-| .txt | Plain text, Markdown, or Org, selected in Settings |
+| .txt | Detected from contents, with an optional per-note override |
 
-The =.txt content= setting applies to all =.txt= notes in the selected library,
-including existing files. It defaults to plain text and is independent of the
-default new-note extension. Changing it changes highlighting, preview, and image
-link insertion. It never rewrites or renames files or adds format metadata.
+Existing =.txt= files can mix Markdown, Org, and plain text in one folder.
+Automatic detection recognizes Markdown headings, fenced blocks, links, and
+images, and Org directives, blocks, links, and multi-level headings. Literal
+code examples are ignored. Prose, ordinary lists, and a lone =* Heading= are
+ambiguous; existing ambiguous files and files with conflicting evidence display
+as plain text. The syntax control beside the view controls offers =Automatic=,
+=Plain text=, =Markdown=, and =Org= when a guess needs correcting.
+
+The folder's =New .txt note syntax= setting defaults to plain text and affects
+only newly created =.txt= notes. A new note starts empty and remembers that
+choice as its fallback until its contents identify a format; clear conflicting
+evidence still falls back to plain text. Changing the preference affects future
+notes only, so an existing collection needs no migration. Your previous =.txt=
+setting becomes the creation default when upgrading.
+
+Creation choices and manual overrides live in nvShift's application data and
+survive restart and in-app rename. They are local to this nvShift profile and
+are not synchronized with the notes folder. Existing notes on another device
+are detected from their contents. No files are rewritten or renamed, and no
+format metadata is inserted. Syntax changes preserve selection, undo, and Vim
+state and apply to preview, headings, list editing, and image insertion.
 
 Editor, Split, and Preview views share the current note. The editor starts in
 source mode with wrapping, undo/redo, and document search. Preview follows
@@ -177,6 +195,8 @@ imports stay protected until nvShift restarts, including across library switches
 Incomplete scans block removal, and changed results require another scan. The
 scan does not establish references from unrelated notes outside this library.
 Symlinks, nested asset folders, and external image locations are not cleaned.
+For =.txt= notes, cleanup checks all three syntax interpretations, regardless of
+automatic detection or a manual override, so a format guess cannot hide a link.
 
 Local image links and HTTP/HTTPS images display in the preview. Remote images
 contact their hosts; requests omit cookies, authentication, and document
@@ -252,6 +272,7 @@ npm test                 # Unit and integration checks
 npm run build            # Renderer and standalone analysis bundles
 npm run check            # Tests and build
 npm run test:benchmark   # Search benchmark against 10,000 notes
+npm run test:benchmark:syntax # Worker detection latency and a 6 MiB stress case
 npm run test:smoke       # Electron desktop smoke checks
 npm run test:package:mac # Extract ZIP, run packaged smoke, verify DMG and signatures
 npm run icons            # Rebuild original app and tray icon assets

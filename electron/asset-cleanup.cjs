@@ -285,7 +285,9 @@ function createAssetCleanup({ library, userData, trashItem, onProgress = () => {
       }
       const pins = session(root);
       if (pins.all) return;
-      if (doc.format !== 'plain' && !/[\\/]|\.(?:png|jpe?g|gif|webp|svg)\b|\[\[|\]\(|\]:|file:/i.test(source)) return;
+      // .txt history may contain plain paths even when its current detection or
+      // override selects markup. Retain it for the collector's syntax union.
+      if (!/\.txt$/i.test(doc.path) && doc.format !== 'plain' && !/[\\/]|\.(?:png|jpe?g|gif|webp|svg)\b|\[\[|\]\(|\]:|file:/i.test(source)) return;
       const historyKey = `${path.dirname(doc.path)}\0${doc.format}\0${digest(source)}`;
       if (pins.sources.has(historyKey)) return;
       const size = Buffer.byteLength(source, 'utf8');

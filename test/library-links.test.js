@@ -67,7 +67,9 @@ test('external directory notes retain logical routes and support .txt syntax, sa
   const original = await put(f.external, 'outside.txt', '\ufeff* TODO Outside\r\nLinked text.\r\n');
   const alias = path.join(f.root, 'Work'); await link(f.external, alias);
   await f.library.open(f.root, { txtSyntax: 'org', defaultExtension: 'md' });
-  const note = f.library.active();
+  const opened = f.library.active();
+  assert.equal(opened.format, 'plain');
+  const note = await f.library.setSyntax(opened.id, 'org');
   assert.equal(note.path, original);
   assert.equal(note.relativePath, 'Work/outside.txt');
   assert.equal(note.format, 'org');
@@ -370,7 +372,7 @@ test('linked Markdown, Org, and configured .txt resources resolve from the real 
     finally { insertedReader.cancel(); }
   }
   await f.library.setPreferences({ txtSyntax: 'markdown' });
-  assert.equal((await f.library.resolveIndexedPath(path.join(alias, 'read.txt'))).format, 'markdown');
+  assert.equal((await f.library.resolveIndexedPath(path.join(alias, 'read.txt'))).format, 'org');
 });
 
 test('a linked target in a hidden physical ancestor remains live through its visible alias', async (t) => {

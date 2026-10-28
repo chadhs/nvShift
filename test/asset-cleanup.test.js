@@ -153,13 +153,75 @@ test('Undo pins survive folder changes and reset only when the cleanup session r
   } finally { await f.close(); }
 });
 
-test('all txt syntax settings retain references, without changing their note contents', async () => {
+test('new-note txt syntax preferences never narrow cleanup reference collection', async () => {
   const f = await fixture({ notes: { 'Note.txt': 'assets/keep.png\n[[file:assets/org.png]]\n![md](assets/md.png)' }, assets: ['keep.png', 'org.png', 'md.png', 'unused.png'] });
   try {
     for (const txtSyntax of ['plain', 'org', 'markdown']) {
       await f.library.setPreferences({ txtSyntax });
       assert.deepEqual(candidateNames(await complete(f)), ['unused.png']);
     }
+  } finally { await f.close(); }
+});
+
+test('txt cleanup unions encoded Markdown, Org and plain paths independently of the displayed format', async () => {
+  const source = '![Markdown][picture]\n\n[picture]: assets/%6Dd.png\n\n[[file:assets/%6Frg.png][Org]]\n\nassets/%70lain.png';
+  const f = await fixture({ notes: { 'Note.txt': source }, assets: ['md.png', 'org.png', 'plain.png', 'unused.png'] });
+  try {
+    const candidates = ['md.png', 'org.png', 'plain.png', 'unused.png'].map((name) => ({ id: name, name, path: path.join(f.root, 'assets', name) }));
+    for (const format of ['plain', 'markdown', 'org']) {
+      assert.deepEqual((await collectAssetReferences({ path: path.join(f.root, 'Note.txt'), format, source }, candidates)).sort(), ['md.png', 'org.png', 'plain.png']);
+    }
+    assert.deepEqual(candidateNames(await complete(f)), ['unused.png']);
+    assert.equal(await fs.readFile(path.join(f.root, 'Note.txt'), 'utf8'), source);
+  } finally { await f.close(); }
+});
+
+test('txt reference union remains uncapped and resolves linked notes from their physical locations', async () => {
+  const names = Array.from({ length: 130 }, (_, index) => `picture-${index}.png`);
+  const source = names.map((name) => `![Image](../notes/assets/%70${name.slice(1)})`).join('\n\n') + '\n\n[[file:../notes/assets/%6Frg.png]]';
+  const f = await fixture({ notes: {}, assets: [...names, 'org.png', 'unused.png'], beforeOpen: async ({ base, root }) => {
+    const outside = path.join(base, 'outside'); await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, 'External.txt'), source);
+    await fs.symlink(outside, path.join(root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  } });
+  try { assert.deepEqual(candidateNames(await complete(f)), ['unused.png']); }
+  finally { await f.close(); }
+});
+
+test('txt recovery and Undo retain references from other syntax interpretations', async () => {
+  const f = await fixture({ notes: { 'Note.txt': 'Current prose.' }, assets: ['draft.png', 'base.png', 'backup.png', 'undo.png', 'unused.png'] });
+  try {
+    const note = f.library.active();
+    await f.recovery('drafts', { version: 2, libraryRoot: f.root, path: note.path,
+      source: '[[file:assets/%64raft.png]]', baseSource: '![Base](assets/%62ase.png)' });
+    await f.recovery('snapshots', { version: 2, path: note.path, buffer: '![Backup][old]\n\n[old]: assets/%62ackup.png' });
+    await f.cleanup.protectHistory(note.id, '[[file:assets/%75ndo.png]]');
+    const result = await complete(f);
+    assert.deepEqual(candidateNames(result), ['backup.png', 'unused.png']);
+    assert.equal(result.candidates.find((asset) => asset.name === 'backup.png').category, 'backup');
+    assert.equal(result.protectedCount, 1);
+  } finally { await f.close(); }
+});
+
+test('txt cleanup resolves extensionless aliases under every syntax interpretation', { skip: process.platform === 'win32' }, async () => {
+  const f = await fixture({ assets: ['actual.png', 'unused.png'] });
+  try {
+    const external = path.join(f.base, 'external'); await fs.mkdir(external);
+    await fs.symlink(path.join(f.root, 'assets', 'actual.png'), path.join(external, 'image alias'));
+    const candidates = ['actual.png', 'unused.png'].map((name) => ({ id: name, name, path: path.join(f.root, 'assets', name) }));
+    const sources = ['[Image](<../external/image%20alias>)', '[[file:../external/image%20alias][Image]]', '../external/image%20alias'];
+    for (const format of ['plain', 'markdown', 'org']) {
+      for (const source of sources) assert.deepEqual(await collectAssetReferences({ path: path.join(f.root, 'Note.txt'), format, source }, candidates), ['actual.png']);
+    }
+  } finally { await f.close(); }
+});
+
+test('an incomplete alternate txt interpretation blocks asset cleanup', async () => {
+  const f = await fixture({ notes: { 'Note.txt': '> '.repeat(200) + '[Image](assets/%75nused.png)' } });
+  try {
+    const result = await f.scan();
+    assert.equal(result.status, 'error'); assert.equal(result.candidates.length, 0);
+    assert.match(result.errors.join(' '), /nesting/); assert.deepEqual(f.trashed, []);
   } finally { await f.close(); }
 });
 

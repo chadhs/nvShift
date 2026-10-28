@@ -1,0 +1,10 @@
+{
+  "samples": 1000,
+  "averageSourceBytes": 2096,
+  "workerStartupMs": 21.36,
+  "medianMs": 0.04,
+  "p95Ms": 0.1,
+  "adversarialSourceBytes": 6291477,
+  "adversarialMs": 52.88,
+  "debounceMs": 120
+}

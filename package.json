@@ -25,6 +25,7 @@
     "postinstall": "patch-package --error-on-fail",
     "dist:win": "npm run prepare:electron && npm run build && electron-builder --win --x64 --publish never",
     "test:benchmark": "node scripts/benchmark.mjs",
+    "test:benchmark:syntax": "node scripts/benchmark-syntax.mjs",
     "prepare:electron": "node node_modules/electron/install.js",
     "test:package:mac": "node scripts/verify-mac.mjs"
   },

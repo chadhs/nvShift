@@ -1,5 +1,42 @@
 #+title: nvShift validation
 
+* Automatic .txt syntax release preparation
+These results cover the automatic .txt syntax source prepared for v0.2.0, based
+on public v0.1.0. The release workflow validates the committed source on native
+macOS, Linux, and Windows runners before publication. Hosted results are pending
+until that workflow completes; Intel Mac and physical desktop checks remain
+pending. Earlier hosted evidence below applies to v0.1.0.
+
+On macOS arm64, 2026-10-27, all 231 Node tests pass. Added coverage includes
+conservative detection, literal examples, mixed and conflicting formats,
+worker failures/timeouts, version-consistent resource snapshots, new-only
+creation defaults, manual modes, in-app and case-only rename, linked targets,
+restart and crash recovery, failed syntax writes/rollback, and cleanup's union
+of all three .txt interpretations. Drafts are journaled before worker analysis;
+an interrupted or failed detector cannot prevent recovery or autosave.
+
+The full development Electron smoke passes automatic/manual .txt controls,
+unsaved titles and previews, Org list continuation, Vim/:w/Undo, selection
+retention, creation defaults, renamed hints, restart overrides, image handling,
+Mermaid, and the existing library and cleanup workflows. The fresh local arm64
+DMG and ZIP pass =npm run test:package:mac=: the extracted app runs the full
+Electron smoke outside the repository, both app copies pass strict ad-hoc
+signature and payload checks, and BSD-3-Clause plus Electron/dependency notices
+are present. The packaged automatic-syntax/Mermaid view was visually inspected.
+SHA-256 files were regenerated for these local artifacts. Previous public
+packages were archived under ignored =release/development-before-txt-auto-*/=;
+the new packages retain the local 0.1.0 version and are not public release files.
+
+The 10,000-note search benchmark measures 815.52 ms indexing, 13.24 ms median,
+and 20.66 ms p95, below the 100 ms target. The separate syntax-worker benchmark
+measures 21.36 ms startup, 0.04 ms median and 0.10 ms p95 for 1,000 approximately
+2 KiB notes after startup. A 6 MiB adversarial source takes 52.88 ms in that
+warmed worker. These are local measurements, not universal timing guarantees.
+Typing submissions are debounced 120 ms; explicit saves/navigation flush them.
+Raw results are in [[file:benchmark.json][search benchmark]] and [[file:syntax-benchmark.json][syntax benchmark]]. Run
+=npm run test:benchmark:syntax= to repeat the latter. The 215-package runtime
+notice inventory remains unchanged and passes its reproducibility check.
+
 * First public release, v0.1.0
 This version includes all earlier development milestones plus manual asset
 cleanup and hosted build/release automation. Earlier local 0.1.x binaries are

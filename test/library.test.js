@@ -66,19 +66,23 @@ test('creation is exclusive, validates portable names, and keeps the note ID thr
   assert.equal(await fs.readFile(other.path, 'utf8'), '');
 });
 
-test('.txt syntax is folder-wide and changes neither bytes nor extension', async (t) => {
-  const f = await fixture(t, { 'a.txt': '# Heading\n', 'b.txt': '* Heading\n', 'c.markdown': '# Markdown\n', 'd.org': '* Org\n' });
+test('.txt syntax is detected per note and folder preferences affect only creation', async (t) => {
+  const f = await fixture(t, { 'a.txt': '# Heading\n', 'b.txt': '#+TITLE: Org\n* Heading\n', 'c.markdown': '# Markdown\n', 'd.org': '* Org\n', 'e.txt': '* Ambiguous\n' });
   await f.library.open(f.root, { defaultExtension: 'txt', txtSyntax: 'markdown' });
   let a = await searchOne(f.library, 'a');
   assert.equal(a.format, 'markdown');
   await f.library.setPreferences({ txtSyntax: 'org' });
-  assert.equal((await searchOne(f.library, 'a')).format, 'org');
+  assert.equal((await searchOne(f.library, 'a')).format, 'markdown');
   assert.equal((await searchOne(f.library, 'b')).format, 'org');
+  assert.equal((await searchOne(f.library, 'e')).format, 'plain');
   assert.equal((await searchOne(f.library, 'c')).format, 'markdown');
-  assert.equal((await f.library.create('New')).extension, 'txt');
+  const created = await f.library.create('New');
+  assert.equal(created.extension, 'txt');
+  assert.equal(created.format, 'org');
   assert.equal(await fs.readFile(path.join(f.root, 'a.txt'), 'utf8'), '# Heading\n');
   await f.library.setPreferences({ txtSyntax: 'plain' });
-  assert.equal((await searchOne(f.library, 'a')).format, 'plain');
+  assert.equal((await searchOne(f.library, 'a')).format, 'markdown');
+  assert.equal(f.library.get(created.id).format, 'org');
 });
 
 test('serialized updates and autosave preserve BOM, CRLF, Unicode, and file permissions', async (t) => {

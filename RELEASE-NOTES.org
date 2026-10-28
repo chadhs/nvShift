@@ -1,5 +1,23 @@
 #+title: nvShift releases
 
+* v0.2.0: automatic syntax for mixed .txt notes
+Use existing Markdown, Org, and plain-text =.txt= notes together without
+renaming or converting them. nvShift detects syntax from each note's contents;
+ambiguous or conflicting content stays readable as plain text.
+
+- =New .txt note syntax= affects only future notes. The previous folder-wide
+  choice becomes the creation default; existing notes detect independently.
+- An optional per-note syntax control corrects guesses. Creation hints and
+  overrides survive restart and in-app rename, without metadata in note files.
+- Unsaved detection updates editing, headings, previews, Mermaid, and image
+  insertion together, preserving selection, Undo, and Vim state.
+- Asset cleanup checks all three interpretations of =.txt= references. Drafts
+  are journaled before detection, and detector failures preserve editing/saving.
+
+Local macOS validation passes 231 tests, both benchmarks, development and
+packaged Electron smoke, signatures, package contents, and license notices.
+The release's linked Actions run records native hosted validation.
+
 * First public release: v0.1.0
 nvShift brings Notational Velocity's search-and-create workflow to ordinary local
 plain-text, Markdown, and Org notes on macOS, Linux, and Windows. Earlier local

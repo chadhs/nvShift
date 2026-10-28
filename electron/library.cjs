@@ -6,6 +6,8 @@ const { createHash, randomUUID } = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const { pathToFileURL } = require('node:url');
 const { scanDirectoryGraph, assertGraphLocation } = require('./directory-graph.cjs');
+const { createSyntaxDetector } = require('./syntax-client.cjs');
+const { createNoteSyntaxState } = require('./note-syntax-state.cjs');
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const EXTENSIONS = new Set(['txt', 'md', 'markdown', 'org']);
@@ -17,7 +19,7 @@ const extensionOf = (file) => path.extname(file).slice(1).toLowerCase();
 const titleOf = (file) => path.basename(file).replace(/\.(?:txt|md|markdown|org)$/i, '');
 const normalized = (value) => value.normalize('NFC').toLocaleLowerCase();
 const inside = (root, file) => { const relative = path.relative(root, file); return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative); };
-const syntaxFor = (extension, preferences) => extension === 'txt' ? preferences.txtSyntax : extension === 'org' ? 'org' : 'markdown';
+const syntaxFor = (extension) => extension === 'txt' ? 'plain' : extension === 'org' ? 'org' : 'markdown';
 
 function validateTitle(value, extension) {
   if (typeof value !== 'string') throw new Error('Enter a note title.');
@@ -126,7 +128,7 @@ class SearchClient {
  * A main-process note library. Callback snapshots are detached from mutable state.
  * @param {{userData:string,onDocument?:Function,onLibrary?:Function,onError?:Function,trashItem?:Function,writeAtomic?:Function}} options
  */
-function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, onError = () => {}, trashItem, writeAtomic = atomicReplace }) {
+function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, onError = () => {}, trashItem, writeAtomic = atomicReplace, writeSyntaxAtomic = atomicReplace, syntaxDetector = createSyntaxDetector() }) {
   if (typeof userData !== 'string') throw new Error('A recovery-data directory is required.');
   let root = null;
   const watchers = new Map();
@@ -141,6 +143,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
   let disposed = false;
   let generation = 0;
   let preferences = { defaultExtension: 'md', txtSyntax: 'plain' };
+  let syntaxState = null;
   const records = new Map();
   const paths = new Map();
   const retired = new Map();
@@ -151,8 +154,17 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
   const watcherTasks = new Set();
   const fileTimers = new Map();
   const reservedNames = new Set();
+  const mutatingPaths = new Set();
   const snapshot = () => ({ root, count: records.size, indexing, errors: [...problems.values()].slice(0, 50) });
-  const document = (record) => record ? ({ id: record.id, path: record.path, name: record.name, title: record.title, relativePath: record.relativePath, extension: record.extension, format: record.format, source: record.source, revision: record.revision, clientVersion: record.clientVersion, diskFingerprint: record.diskFingerprint, status: record.status, modified: record.modified, ...(record.error ? { error: record.error } : {}) }) : null;
+  const document = (record) => {
+    if (!record) return null;
+    // Source and its detected format become public together. During worker or
+    // journal I/O, resource authorization can only see the prior complete revision.
+    if (record.syntaxPending) return record.lastDocument ? { ...record.lastDocument } : null;
+    const value = { id: record.id, path: record.path, name: record.name, title: record.title, relativePath: record.relativePath, extension: record.extension, format: record.format, syntaxMode: record.extension === 'txt' ? record.syntaxMode : 'fixed', syntaxDetection: record.syntaxDetection ?? null, syntaxWarning: record.syntaxWarning ?? '', source: record.source, revision: record.revision, clientVersion: record.clientVersion, diskFingerprint: record.diskFingerprint, status: record.status, modified: record.modified, ...(record.error ? { error: record.error } : {}) };
+    record.lastDocument = value;
+    return { ...value };
+  };
   const emitLibrary = () => onLibrary(snapshot());
   const emitDocument = (record) => onDocument(document(record));
   const errorMessage = (file, error) => `${root ? path.relative(root, file) : path.basename(file)}: ${error.message}`;
@@ -174,10 +186,12 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
     record.path = file; record.name = path.basename(file); record.title = titleOf(file);
     record.logicalPath = descriptor?.logicalPath ?? record.logicalPath ?? file;
     record.relativePath = path.relative(root, record.logicalPath).split(path.sep).join('/');
-    record.extension = extensionOf(file); record.format = syntaxFor(record.extension, preferences);
+    record.extension = extensionOf(file);
+    if (record.extension !== 'txt' || !record.format) record.format = syntaxFor(record.extension);
   };
   const makeRecord = (file, disk, id, descriptor = descriptorFor(file)) => {
-    const record = { id: id ?? digest(`${root}\0${path.relative(root, file)}`).slice(0, 32), source: disk.source, baseSource: disk.source, bom: disk.bom, newline: disk.newline, mode: disk.mode ?? 0o600, diskFingerprint: disk.fingerprint, modified: disk.modified ?? Date.now(), revision: 1, externalRevision: 0, clientVersion: 0, status: 'saved', error: '', queue: Promise.resolve(), timer: null, missing: false };
+    const savedSyntax = syntaxState?.get(file);
+    const record = { id: id ?? savedSyntax?.id ?? digest(`${root}\0${path.relative(root, file)}`).slice(0, 32), syntaxMode: savedSyntax?.syntaxMode ?? 'auto', creationSyntax: savedSyntax?.creationSyntax ?? null, source: disk.source, baseSource: disk.source, bom: disk.bom, newline: disk.newline, mode: disk.mode ?? 0o600, diskFingerprint: disk.fingerprint, modified: disk.modified ?? Date.now(), revision: 1, externalRevision: 0, clientVersion: 0, status: 'saved', error: '', queue: Promise.resolve(), timer: null, missing: false };
     record.directoryIdentity = descriptor?.directoryIdentity;
     recordPath(record, file, descriptor);
     return record;
@@ -208,12 +222,35 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
     if (activeId === record.id && !records.has(record.id)) { activeId = null; emitDocument(null); }
     emitLibrary();
   };
-  const updateIndex = (record) => index.call('upsert', document(record));
+  // One lazily started worker serves the library. Detection results are tied to
+  // the exact source and revision; neither linked aliases nor later edits may
+  // receive a result produced for an earlier snapshot.
+  async function resolveSyntax(record) {
+    if (record.extension !== 'txt') { record.format = syntaxFor(record.extension); record.syntaxPending = false; return; }
+    if (record.syntaxMode !== 'auto') { record.format = record.syntaxMode; record.syntaxWarning = ''; record.syntaxPending = false; return; }
+    const source = record.source, revision = record.revision, currentGeneration = generation;
+    let result = record.syntaxCache?.source === source ? record.syntaxCache.result : null;
+    record.syntaxPending = true;
+    try {
+      if (!result) result = await syntaxDetector.detect(source);
+      if (generation !== currentGeneration || record.revision !== revision || record.source !== source || record.syntaxMode !== 'auto') return;
+      record.syntaxCache = { source, result };
+      record.syntaxDetection = result.reason;
+      record.syntaxWarning = '';
+      record.format = result.reason === 'ambiguous' ? (record.creationSyntax ?? 'plain') : result.format;
+    } catch (error) {
+      // Classification failure must never prevent journaling, saving, or editing.
+      record.format = 'plain'; record.syntaxDetection = 'unavailable';
+      record.syntaxWarning = `Format detection failed; showing plain text. ${error.message}`;
+      onError(record.syntaxWarning);
+    } finally { record.syntaxPending = false; }
+  }
+  const updateIndex = async (record) => { await resolveSyntax(record); return index.call('upsert', document(record)); };
 
   async function writeDraft(record) {
     const file = draftPath(record);
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    const recovery = { version: 2, libraryRoot: root, id: record.id, path: record.path, logicalPath: record.logicalPath, directoryIdentity: record.directoryIdentity ?? null, source: record.source, baseSource: record.baseSource, baseFingerprint: record.diskFingerprint, bom: record.bom, newline: record.newline, mode: record.mode, modified: record.modified, revision: record.revision, clientVersion: record.clientVersion, conflict: record.status === 'conflict', error: record.error, savedAt: Date.now() };
+    const recovery = { version: 2, libraryRoot: root, id: record.id, path: record.path, logicalPath: record.logicalPath, directoryIdentity: record.directoryIdentity ?? null, syntaxMode: record.syntaxMode, creationSyntax: record.creationSyntax, source: record.source, baseSource: record.baseSource, baseFingerprint: record.diskFingerprint, bom: record.bom, newline: record.newline, mode: record.mode, modified: record.modified, revision: record.revision, clientVersion: record.clientVersion, conflict: record.status === 'conflict', error: record.error, savedAt: Date.now() };
     await atomicReplace(file, Buffer.from(JSON.stringify(recovery)), { mode: 0o600 });
   }
   async function clearDraft(record) { await fs.unlink(draftPath(record)).catch((error) => { if (error.code !== 'ENOENT') throw error; }); }
@@ -221,7 +258,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
     const directory = path.join(recoveryRoot(), 'snapshots');
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const name = `${record.id}-${Date.now()}-${randomUUID()}.json`;
-    const value = { version: 2, reason, path: record.path, logicalPath: record.logicalPath, directoryIdentity: record.directoryIdentity ?? null, savedAt: Date.now(), buffer: record.source, bom: record.bom, newline: record.newline, baseFingerprint: record.diskFingerprint, disk: disk ? { source: disk.source, bom: disk.bom, newline: disk.newline, fingerprint: disk.fingerprint } : null };
+    const value = { version: 2, reason, path: record.path, logicalPath: record.logicalPath, directoryIdentity: record.directoryIdentity ?? null, syntaxMode: record.syntaxMode, creationSyntax: record.creationSyntax, savedAt: Date.now(), buffer: record.source, bom: record.bom, newline: record.newline, baseFingerprint: record.diskFingerprint, disk: disk ? { source: disk.source, bom: disk.bom, newline: disk.newline, fingerprint: disk.fingerprint } : null };
     await atomicReplace(path.join(directory, name), Buffer.from(JSON.stringify(value)), { mode: 0o600 });
     const previous = (await fs.readdir(directory)).filter((file) => file.startsWith(`${record.id}-`)).sort().reverse();
     await Promise.all(previous.slice(20).map((file) => fs.unlink(path.join(directory, file))));
@@ -318,6 +355,11 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
       await assertSafePath(file, location.identity);
       const disk = await readDisk(file);
       const record = makeRecord(file, disk);
+      if (record.extension === 'txt') {
+        record.syntaxMode = encoding?.syntaxMode ?? 'auto';
+        record.creationSyntax = encoding ? encoding.creationSyntax ?? null : preferences.txtSyntax;
+        await syntaxState.set(file, record);
+      }
       addRecord(record); problems.delete(file); await updateIndex(record); emitLibrary();
       return record;
     } finally { reservedNames.delete(reservation); }
@@ -350,6 +392,9 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
       if (!record) {
         const existing = paths.get(pathKey(file));
         if (existing) return;
+        // A delayed event for a rolled-back case-only rename may still open
+        // the original on a case-insensitive volume. Index actual spellings only.
+        if (!(await fs.readdir(path.dirname(file))).includes(path.basename(file))) return;
         const added = makeRecord(file, disk); addRecord(added); await updateIndex(added); emitLibrary();
         return;
       }
@@ -445,10 +490,12 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
   function processWatcher(file, currentGeneration, event) {
     if (currentGeneration !== generation || disposed) return;
     if (indexing || scanning) { pendingPaths.set(file, event); return; }
+    if (mutatingPaths.has(pathKey(file))) { pendingPaths.set(file, event); return; }
     const task = (async () => {
       let stat;
       try { stat = await fs.lstat(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (currentGeneration !== generation || disposed) return;
+      if (mutatingPaths.has(pathKey(file))) { pendingPaths.set(file, event); return; }
       if (event === 'addDir' || event === 'unlinkDir' || stat?.isDirectory() || stat?.isSymbolicLink()
         || graph?.links.has(pathKey(file)) || graph?.directories.has(pathKey(file))) {
         scheduleTopology(currentGeneration);
@@ -535,7 +582,8 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
     for (const descriptor of graph.files.values()) {
       try {
         await assertSafePath(descriptor.path, descriptor.directoryIdentity);
-        addRecord(makeRecord(descriptor.path, await readDisk(descriptor.path), undefined, descriptor));
+        const record = makeRecord(descriptor.path, await readDisk(descriptor.path), undefined, descriptor);
+        addRecord(record); await resolveSyntax(record);
       } catch (error) { report(descriptor.logicalPath, error); }
     }
   }
@@ -558,6 +606,12 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
         const descriptor = graph.files.get(pathKey(recovery.path));
         let record = records.get(paths.get(pathKey(recovery.path)));
         const sameLocation = legacy || (descriptor && descriptor.directoryIdentity === recovery.directoryIdentity);
+        const persistedSyntax = syntaxState.get(recovery.path);
+        if (record?.extension === 'txt' && !persistedSyntax) {
+          if (recovery.syntaxMode === 'auto' || SYNTAXES.has(recovery.syntaxMode)) record.syntaxMode = recovery.syntaxMode;
+          if (recovery.creationSyntax === null || SYNTAXES.has(recovery.creationSyntax)) record.creationSyntax = recovery.creationSyntax;
+          await resolveSyntax(record);
+        }
         if (record?.source === recovery.source && !recovery.conflict && sameLocation) { await fs.unlink(file); continue; }
         if (!record) {
           const location = descriptor ?? { logicalPath: recovery.logicalPath ?? recovery.path, directoryIdentity: recovery.directoryIdentity ?? descriptorFor(recovery.path)?.directoryIdentity };
@@ -568,11 +622,21 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
         }
         const sameDisk = !record.missing && sameLocation && record.diskFingerprint === recovery.baseFingerprint;
         if (!legacy) record.directoryIdentity = recovery.directoryIdentity ?? undefined;
+        if (record.extension === 'txt') {
+          // A completed preference write may be newer than the last journal
+          // write if the process stopped between those two operations.
+          if (!persistedSyntax) {
+            if (recovery.syntaxMode === 'auto' || SYNTAXES.has(recovery.syntaxMode)) record.syntaxMode = recovery.syntaxMode;
+            if (recovery.creationSyntax === null || SYNTAXES.has(recovery.creationSyntax)) record.creationSyntax = recovery.creationSyntax;
+          }
+          await syntaxState.set(record.path, record);
+        }
         record.source = recovery.source; record.clientVersion = Number.isSafeInteger(recovery.clientVersion) ? recovery.clientVersion : 0;
         record.revision = Math.max(record.revision, Number.isSafeInteger(recovery.revision) ? recovery.revision + 1 : 1);
         record.status = sameDisk && !recovery.conflict ? 'dirty' : 'conflict';
         record.error = record.status === 'conflict' ? 'A recovered draft differs from the disk file. Choose Keep both or Use disk.' : '';
         activeId ??= record.id;
+        await resolveSyntax(record);
         await writeDraft(record);
         if (record.status === 'dirty') scheduleSave(record);
       } catch (error) { report(file, new Error(`Recovery could not be loaded: ${error.message}`)); }
@@ -610,8 +674,11 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
     },
     async assertWritable(id) {
       const record = requireRecord(id);
-      await assertSafePath(record.path, record.directoryIdentity);
-      return document(record);
+      return enqueue(record, async () => {
+        await resolveSyntax(record);
+        await assertSafePath(record.path, record.directoryIdentity);
+        return document(record);
+      });
     },
     async open(selectedRoot, selectedPreferences = {}) {
       if (disposed) throw new Error('The note library has been closed.');
@@ -625,8 +692,10 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
       await closeWatchers();
       await Promise.all([...watcherTasks]);
       await topologyQueue; topologyQueue = Promise.resolve();
+      const nextSyntaxState = await createNoteSyntaxState({ userData, root: canonical, writeAtomic: writeSyntaxAtomic });
       await index?.close(); index = null;
       root = canonical; records.clear(); paths.clear(); retired.clear(); retiredActiveId = null; problems.clear(); pendingPaths.clear(); topologyProblems.clear(); activeId = null;
+      syntaxState = nextSyntaxState;
       preferences = { defaultExtension: EXTENSIONS.has(selectedPreferences.defaultExtension) ? selectedPreferences.defaultExtension : 'md', txtSyntax: SYNTAXES.has(selectedPreferences.txtSyntax) ? selectedPreferences.txtSyntax : 'plain' };
       index = new SearchClient(); indexing = true; emitLibrary();
       const currentGeneration = generation;
@@ -654,8 +723,12 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
     async activate(id) {
       const previous = records.get(activeId);
       if (previous && previous.id !== id) await enqueue(previous, () => saveRecord(previous));
-      const record = requireRecord(id); activeId = record.id; emitDocument(record);
-      return document(record);
+      const record = requireRecord(id);
+      return enqueue(record, async () => {
+        await resolveSyntax(record);
+        activeId = record.id; emitDocument(record);
+        return document(record);
+      });
     },
     async updateBuffer(id, source, clientVersion, baseRevision) {
       if (typeof source !== 'string' || !source.isWellFormed() || Buffer.byteLength(source, 'utf8') > MAX_BYTES || source.includes('\u0000')) throw new Error('Notes must contain UTF-8 text no larger than 16 MiB.');
@@ -675,18 +748,35 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
         const nextSource = source.replace(/\r\n|\r/gu, '\n');
         if (serializeSource(nextSource, record.bom, record.newline).length > MAX_BYTES) throw new Error('The note exceeds 16 MiB with its original newline encoding.');
         const staleExternalBase = Number.isSafeInteger(baseRevision) && baseRevision < record.externalRevision;
+        if (record.extension === 'txt' && record.syntaxMode === 'auto') record.syntaxPending = true;
         record.source = nextSource; record.clientVersion = clientVersion; record.revision++;
         if (staleExternalBase || record.status === 'conflict') {
           record.status = 'conflict'; record.error = staleExternalBase ? 'The note changed outside nvShift while you were editing. Choose Keep both or Use disk.' : record.error;
         } else { record.status = dirty(record) ? 'dirty' : 'saved'; record.error = ''; }
         try { if (dirty(record) || record.status === 'conflict') await writeDraft(record); else await clearDraft(record); }
-        catch (error) { record.status = 'error'; record.error = `Recovery could not be written: ${error.message}`; emitDocument(record); throw error; }
+        catch (error) {
+          await resolveSyntax(record);
+          record.status = 'error'; record.error = `Recovery could not be written: ${error.message}`; emitDocument(record); throw error;
+        }
         await updateIndex(record); scheduleSave(record);
         emitDocument(record); emitLibrary();
         return document(record);
       });
     },
     async save(id = activeId) { return enqueue(requireRecord(id), () => saveRecord(requireRecord(id))); },
+    async setSyntax(id, syntaxMode) {
+      if (syntaxMode !== 'auto' && !SYNTAXES.has(syntaxMode)) throw new Error('Choose Automatic, Plain text, Markdown, or Org.');
+      const record = requireRecord(id);
+      if (record.extension !== 'txt') throw new Error('Only .txt notes support a syntax override.');
+      return enqueue(record, async () => {
+        await syntaxState.set(record.path, { ...record, syntaxMode });
+        record.syntaxMode = syntaxMode; record.revision++;
+        await updateIndex(record);
+        if (dirty(record) || record.status === 'conflict') await writeDraft(record);
+        emitDocument(record); emitLibrary();
+        return document(record);
+      });
+    },
     async rename(id, value) {
       const record = requireRecord(id);
       return enqueue(record, async () => {
@@ -696,33 +786,68 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
         const oldPath = record.path;
         const file = path.join(path.dirname(oldPath), `${title}.${record.extension}`);
         if (file === oldPath) return document(record);
-        await assertSafePath(file, record.directoryIdentity); await collision(path.dirname(file), path.basename(file), oldPath);
-        await assertSafePath(oldPath, record.directoryIdentity);
-        const disk = await readDisk(oldPath);
-        if (disk.fingerprint !== record.diskFingerprint) { await conflict(record, 'The note changed before renaming. Choose Keep both or Use disk.', disk); throw new Error(record.error); }
-        await archive(record, disk, 'before-rename');
-        await assertSafePath(oldPath, record.directoryIdentity);
-        // link/unlink is intentionally used instead of an overwrite-capable rename.
-        try { await fs.link(oldPath, file); }
-        catch (error) {
-          if (error.code !== 'EEXIST' || normalized(path.basename(file)) !== normalized(path.basename(oldPath))) throw error;
-          const target = await fs.stat(file);
-          const original = await fs.stat(oldPath);
-          if (target.ino !== original.ino || target.dev !== original.dev) throw error;
-          const temporary = path.join(path.dirname(file), `.nvshift-${randomUUID()}.tmp`);
-          await fs.rename(oldPath, temporary);
-          try { await fs.link(temporary, file); await fs.unlink(temporary); }
-          catch (failure) { await fs.rename(temporary, oldPath).catch(() => {}); throw failure; }
+        const mutationKeys = new Set([pathKey(oldPath), pathKey(file)]);
+        for (const key of mutationKeys) mutatingPaths.add(key);
+        try {
+          await assertSafePath(file, record.directoryIdentity); await collision(path.dirname(file), path.basename(file), oldPath);
+          await assertSafePath(oldPath, record.directoryIdentity);
+          const disk = await readDisk(oldPath);
+          if (disk.fingerprint !== record.diskFingerprint) { await conflict(record, 'The note changed before renaming. Choose Keep both or Use disk.', disk); throw new Error(record.error); }
+          await archive(record, disk, 'before-rename');
+          await assertSafePath(oldPath, record.directoryIdentity);
+          let changedSpelling = false;
+          // link/unlink is intentionally used instead of an overwrite-capable rename.
+          try { await fs.link(oldPath, file); }
+          catch (error) {
+            if (error.code !== 'EEXIST' || normalized(path.basename(file)) !== normalized(path.basename(oldPath))) throw error;
+            const target = await fs.stat(file);
+            const original = await fs.stat(oldPath);
+            if (target.ino !== original.ino || target.dev !== original.dev) throw error;
+            const temporary = path.join(path.dirname(file), `.nvshift-${randomUUID()}.tmp`);
+            await fs.rename(oldPath, temporary);
+            try { await fs.link(temporary, file); await fs.unlink(temporary); }
+            catch (failure) { await fs.rename(temporary, oldPath).catch(() => {}); throw failure; }
+            changedSpelling = true;
+          }
+          // Persist the stable identity at its new canonical path before the
+          // source name disappears, including case-only renames.
+          if (record.extension === 'txt') {
+            const created = await fs.lstat(file);
+            try { await syntaxState.set(file, record, oldPath); }
+            catch (error) {
+              try {
+                await assertSafePath(file, record.directoryIdentity);
+                const latest = await fs.lstat(file);
+                if (latest.ino !== created.ino || latest.dev !== created.dev || !latest.isFile() || latest.isSymbolicLink()) throw new Error('The destination changed during rename.');
+                if (changedSpelling) {
+                  const temporary = path.join(path.dirname(file), `.nvshift-${randomUUID()}.tmp`);
+                  await fs.rename(file, temporary);
+                  try { await fs.rename(temporary, oldPath); }
+                  catch (failure) { await fs.rename(temporary, file).catch(() => {}); throw failure; }
+                } else {
+                  const original = await fs.lstat(oldPath);
+                  if (original.ino !== created.ino || original.dev !== created.dev) throw new Error('The original changed during rename.');
+                  await fs.unlink(file);
+                }
+              } catch (failure) { onError(`Rename could not be rolled back: ${failure.message}`); }
+              throw error;
+            }
+          }
+          if (await fs.lstat(oldPath).then(() => true, () => false)) {
+            // On case-insensitive filesystems, the source spelling now names the destination.
+            const entries = await fs.readdir(path.dirname(file));
+            if (entries.includes(path.basename(oldPath))) await fs.unlink(oldPath);
+          }
+          paths.delete(pathKey(oldPath)); recordPath(record, file); paths.set(pathKey(file), record.id);
+          record.revision++; record.modified = (await fs.stat(file)).mtimeMs;
+          await updateIndex(record); emitDocument(record); emitLibrary();
+          return document(record);
+        } finally {
+          for (const key of mutationKeys) mutatingPaths.delete(key);
+          for (const [changedFile, event] of [...pendingPaths]) if (mutationKeys.has(pathKey(changedFile))) {
+            pendingPaths.delete(changedFile); queueWatcher(changedFile, generation, event);
+          }
         }
-        if (await fs.lstat(oldPath).then(() => true, () => false)) {
-          // On case-insensitive filesystems, the source spelling now names the destination.
-          const entries = await fs.readdir(path.dirname(file));
-          if (entries.includes(path.basename(oldPath))) await fs.unlink(oldPath);
-        }
-        paths.delete(pathKey(oldPath)); recordPath(record, file); paths.set(pathKey(file), record.id);
-        record.revision++; record.modified = (await fs.stat(file)).mtimeMs;
-        await updateIndex(record); emitDocument(record); emitLibrary();
-        return document(record);
       });
     },
     async trash(id) {
@@ -794,12 +919,6 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
       if (patch.defaultExtension !== undefined && !EXTENSIONS.has(patch.defaultExtension)) throw new Error('Invalid default note extension.');
       if (patch.txtSyntax !== undefined && !SYNTAXES.has(patch.txtSyntax)) throw new Error('Invalid .txt syntax.');
       preferences = { ...preferences, ...patch };
-      const changed = [];
-      for (const record of records.values()) {
-        const format = syntaxFor(record.extension, preferences);
-        if (record.format !== format) { record.format = format; record.revision++; emitDocument(record); changed.push(record); }
-      }
-      if (index) await Promise.all(changed.map(updateIndex));
       emitLibrary();
       return { ...preferences };
     },
@@ -814,6 +933,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
         } catch (error) { failures.push(error); }
       }
       if (failures.length) throw new AggregateError(failures, 'Some notes could not be saved. Recovery drafts have been retained.');
+      await syntaxState?.flush();
     },
     async dispose() {
       if (disposed) return;
@@ -826,6 +946,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
         await Promise.all([...watcherTasks]);
         for (const record of records.values()) clearTimeout(record.timer);
         await index?.close(); index = null;
+        await syntaxDetector.close();
       }
     },
   };

@@ -89,6 +89,12 @@ async function openNote(title, heading) {
   await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).document?.title).toBe(title);
   if (heading !== undefined) await expect(window.locator('#note-title')).toHaveText(heading);
 }
+async function expectSyntax(format, mode = 'auto') {
+  await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).document?.format).toBe(format);
+  await expect(window.locator('#syntax-select')).toBeVisible();
+  await expect(window.locator('#syntax-select')).toHaveValue(mode);
+  if (mode === 'auto') await expect(window.locator('#syntax-select option[value=auto]')).toHaveText(`Automatic · ${format === 'org' ? 'Org' : format === 'markdown' ? 'Markdown' : 'Plain text'}`);
+}
 const buffer = () => window.evaluate(async () => (await window.nvShift.initial()).document?.source);
 async function replaceSource(text) {
   await source().focus();
@@ -319,8 +325,9 @@ try {
   await expect(window.locator('#note-title')).toHaveText('Linked Org');
   await expect(window.locator('#content .image-preview[data-loaded="true"]')).toHaveCount(1, { timeout: 15000 });
   await openNote('LinkedText');
-  await expect(window.locator('#syntax-label')).toHaveText('PLAIN TEXT');
-  await expect(window.locator('#content .plain-preview')).toContainText('* TODO Linked text');
+  await expectSyntax('org');
+  await expect(window.locator('#note-title')).toHaveText('Linked text');
+  await expect(window.locator('#content .image-preview[data-loaded="true"]')).toHaveCount(1, { timeout: 15000 });
 
   await openNote('Welcome', 'Welcome to nvShift');
   await window.locator('#view-split').click();
@@ -460,8 +467,9 @@ try {
   await expect(window.locator('html')).toHaveAttribute('data-content-width', 'full');
   await expect(window.locator('#toggle-content-width')).toHaveAttribute('aria-pressed', 'true');
 
+  // Existing .txt files detect independently, and defaults affect new notes only.
   await openNote('syntax');
-  await expect(window.locator('#syntax-label')).toHaveText('PLAIN TEXT');
+  await expectSyntax('plain');
   await expect(window.locator('#content .plain-preview')).toContainText('* TODO Text syntax');
   await listEnter('- Plain item', '- Plain item\n');
   await replaceSource('* TODO Text syntax\nPreserve café 日本語.\n');
@@ -469,28 +477,100 @@ try {
   expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
   await setSetting('#txt-syntax', 'org');
   await doneSettings();
-  await expect(window.locator('#syntax-label')).toHaveText('ORG');
+  await expectSyntax('plain');
+  await search('Created Org text');
+  await window.locator('#create-extension').selectOption('txt');
+  await searchField().press(`${modifier}+Enter`);
+  await expect(window.locator('#note-path')).toHaveText('Created Org text.txt');
+  await expectSyntax('org');
+  await listEnter('- Created', '- Created\n- ');
+  await setSetting('#txt-syntax', 'markdown');
+  await doneSettings();
+  await expectSyntax('org');
+  await window.locator('#rename-note').click();
+  await window.locator('#rename-input').fill('Renamed Org text');
+  await window.locator('#rename-form').evaluate((element) => element.requestSubmit());
+  await expect(window.locator('#note-path')).toHaveText('Renamed Org text.txt');
+  await expectSyntax('org');
+  await search('Created Markdown text');
+  await searchField().press(`${modifier}+Enter`);
+  await expect(window.locator('#note-path')).toHaveText('Created Markdown text.txt');
+  await expectSyntax('markdown');
+  await listEnter('- Created Markdown', '- Created Markdown\n- ');
+  await window.locator('#create-extension').selectOption('md');
+
+  await openNote('syntax');
+  await expectSyntax('plain');
+  // A manual correction preserves the current selection and never rewrites bytes.
+  await source().focus();
+  await window.keyboard.press(`${modifier}+Home`);
+  await window.keyboard.down('Shift');
+  for (let index = 0; index < 6; index++) await window.keyboard.press('ArrowRight');
+  await window.keyboard.up('Shift');
+  await expect.poll(() => window.evaluate(() => getSelection()?.toString())).toBe('* TODO');
+  await window.locator('#syntax-select').selectOption('org');
+  await expectSyntax('org', 'org');
+  await expect.poll(() => window.evaluate(() => getSelection()?.toString())).toBe('* TODO');
+  await expect(source()).toBeFocused();
   await expect(window.locator('#note-title')).toHaveText('Text syntax');
   await expect(window.locator('#document-title')).toHaveText('Text syntax');
   expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
   await listEnter('- [x] Text item', '- [x] Text item\n- [ ] ');
+  await window.locator('#syntax-select').selectOption('markdown');
+  await expectSyntax('markdown', 'markdown');
+  await source().focus();
+  await window.keyboard.press(`${modifier}+z`);
+  await expect.poll(buffer).toBe('- [x] Text item');
+  await listEnter('- Markdown item', '- Markdown item\n- ');
+  await replaceSource('* TODO Text syntax\nPreserve café 日本語.\n');
+  await window.locator('#syntax-select').selectOption('auto');
+  await expectSyntax('plain');
+  await waitSaved();
+  expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
+
+  // Unsaved detection updates titles, preview, diagrams, and Org Enter together.
+  await replaceSource('# Automatic Markdown\n\n```mermaid\nflowchart LR\nA-->B\n```');
+  await expectSyntax('markdown');
+  await expect(window.locator('#note-title')).toHaveText('Automatic Markdown');
+  await expect(window.locator('#document-title')).toHaveText('Automatic Markdown');
+  await expect(window.locator('#content .diagram[data-rendered="true"]')).toHaveCount(1, { timeout: 20000 });
+  await window.screenshot({ path: `test-results/${executablePath ? 'packaged' : 'desktop'}-syntax-detection.png` });
+  await replaceSource('#+TITLE: Automatic Org\n\n- One');
+  await expectSyntax('org');
+  await expect(window.locator('#note-title')).toHaveText('Automatic Org');
+  await expect(window.locator('#document-title')).toHaveText('Automatic Org');
+  await source().focus();
+  await window.keyboard.press(`${modifier}+End`);
+  await window.keyboard.press('Enter');
+  await expect.poll(buffer).toBe('#+TITLE: Automatic Org\n\n- One\n- ');
+  await setSetting('#vim-mode', true);
+  await doneSettings();
+  await source().focus();
+  await window.keyboard.press('Escape');
+  await window.keyboard.type('A');
+  await window.locator('#syntax-select').selectOption('org');
+  await expectSyntax('org', 'org');
+  await source().focus();
+  await window.keyboard.type('Second');
+  await window.keyboard.press('Enter');
+  await window.keyboard.type('Third');
+  await window.keyboard.press('Escape');
+  await expect.poll(buffer).toBe('#+TITLE: Automatic Org\n\n- One\n- Second\n- Third');
+  await window.keyboard.type(':w');
+  await window.keyboard.press('Enter');
+  await waitSaved();
+  await window.keyboard.type('u');
+  await expect.poll(buffer).toBe('#+TITLE: Automatic Org\n\n- One\n- Second');
+  await setSetting('#vim-mode', false);
+  await doneSettings();
   await replaceSource('* TODO Text syntax\nPreserve café 日本語.\n');
   await waitSaved();
   expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
   await openNote('LinkedText');
-  await expect(window.locator('#syntax-label')).toHaveText('ORG');
+  await expectSyntax('org');
   await expect(window.locator('#note-title')).toHaveText('Linked text');
   await expect(window.locator('#document-title')).toHaveText('Linked text');
   await expect(window.locator('#content .image-preview[data-loaded="true"]')).toHaveCount(1, { timeout: 15000 });
-  await openNote('syntax');
-  await setSetting('#txt-syntax', 'markdown');
-  await doneSettings();
-  await expect(window.locator('#syntax-label')).toHaveText('MARKDOWN');
-  expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
-  await listEnter('- Markdown item', '- Markdown item\n- ');
-  await replaceSource('* TODO Text syntax\nPreserve café 日本語.\n');
-  await waitSaved();
-  expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
 
   await window.keyboard.press(`${modifier}+l`);
   await window.locator('#library-search').fill('A new thought');
@@ -579,7 +659,7 @@ try {
   await expect(window.locator('#note-title')).toHaveText('Welcome to nvShift');
   await expect(window.locator('#message')).toBeHidden();
 
-  // Folder changes flush the old buffer and preserve each folder's syntax setting.
+  // Folder changes flush the old buffer and preserve each folder's creation defaults.
   const secondRoot = path.join(directory, 'second-library');
   await mkdir(secondRoot);
   await writeFile(path.join(secondRoot, 'Second.md'), '# Second library');
@@ -715,6 +795,10 @@ try {
   expect(restored.settings.sansSerifHeadings).toBe(true);
   expect(restored.settings.contentWidth).toBe('full');
   expect(restored.settings.filenameHeadings).toBe(true);
+  await openNote('Renamed Org text');
+  await expectSyntax('org');
+  await openNote('syntax');
+  await expectSyntax('org', 'org');
   // Undo pins end at app restart. The removed image remains an older-backup
   // candidate, which is explicitly selectable without touching its snapshots.
   const restartedTrash = await installAssetTrashFixture();
@@ -745,7 +829,7 @@ try {
   await expect(source()).toContainText('Renderer recovery marker', { timeout: 15000 });
   await waitSaved();
   expect(errors).toEqual([]);
-  console.log(`nvShift ${executablePath ? 'packaged' : 'development'} smoke passed: recursive search, arrow-result browsing/focus/flush/latest selection, content headings/unsaved titles/filename preference, keyboard creation, Org list continuation/Vim/:w/undo, all themes, .txt syntax, images, asset cleanup/recovery/Undo/Trash/revalidation, Mermaid, external saves/conflicts, rename, settings restart, sandbox, shortcut errors, background/relaunch.`);
+  console.log(`nvShift ${executablePath ? 'packaged' : 'development'} smoke passed: recursive search, arrow-result browsing/focus/flush/latest selection, content headings/unsaved titles/filename preference, keyboard creation, Org list continuation/Vim/:w/undo, all themes, mixed .txt detection/new-note defaults/manual overrides/Undo/Vim/restart, images, asset cleanup/recovery/Undo/Trash/revalidation, Mermaid, external saves/conflicts, rename, settings restart, sandbox, shortcut errors, background/relaunch.`);
 } catch (error) {
   console.error('Smoke failure details:', JSON.stringify({ errors, state: await window?.evaluate(async () => {
     const initial = await window.nvShift.initial().then((state) => ({ library: state.library, document: state.document?.name })).catch((failure) => ({ error: failure.message }));

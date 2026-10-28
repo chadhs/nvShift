@@ -12,7 +12,9 @@ const folded = (value) => value.normalize('NFC').toLocaleLowerCase();
 /**
  * Cleanup references deliberately do not use preview descriptors or their
  * 100-image cap. Literal filename mentions also retain assets conservatively,
- * including paths in plain text, code examples, and unrecognized markup.
+ * including paths in plain text, code examples, and unrecognized markup. A
+ * .txt note is checked as all three syntaxes independently of its detected or
+ * manually selected format. Detection is presentation, never deletion authority.
  */
 export async function collectAssetReferences(doc, candidates, canonicalCache = new Map()) {
   if (typeof doc.source !== 'string' || !doc.source.isWellFormed() || doc.source.includes('\0')) throw new Error('Invalid source in asset reference scan.');
@@ -25,21 +27,27 @@ export async function collectAssetReferences(doc, candidates, canonicalCache = n
       || (asset.aliases || []).some((alias) => source.includes(folded(alias)))) matches.add(asset.id);
   }
   const targets = new Set();
-  if (doc.format === 'plain') {
-    for (const line of doc.source.split(/\r?\n/)) {
-      if (line.length <= 8192 && (/[\\/]|\bfile:|^\s*~|\.(?:png|jpe?g|gif|webp|svg)(?:\s|$)/i.test(line))) targets.add(line.trim());
-      // Tokenize once rather than backtracking a path regex over long prose.
-      for (const match of line.matchAll(/[^\s<>"']+/g)) {
-        if (match[0].length <= 8192 && (/[\\/]|^file:|\.(?:png|jpe?g|gif|webp|svg)$/i.test(match[0]))) targets.add(match[0]);
+  const formats = /\.txt$/i.test(doc.path || doc.name || '') ? ['plain', 'markdown', 'org'] : [doc.format];
+  for (const format of formats) {
+    if (format === 'plain') {
+      for (const line of doc.source.split(/\r?\n/)) {
+        if (line.length <= 8192 && (/[\\/]|\bfile:|^\s*~|\.(?:png|jpe?g|gif|webp|svg)(?:\s|$)/i.test(line))) targets.add(line.trim());
+        // Tokenize once rather than backtracking a path regex over long prose.
+        for (const match of line.matchAll(/[^\s<>"']+/g)) {
+          if (match[0].length <= 8192 && (/[\\/]|^file:|\.(?:png|jpe?g|gif|webp|svg)$/i.test(match[0]))) targets.add(match[0]);
+        }
       }
-    }
-  } else visitTree(analyzeDocument(doc).tree, (node) => {
-    if (doc.format === 'org' && node.type === 'link') {
-      const raw = doc.source.slice(node.position.start.offset, node.position.end.offset);
-      const target = /^\[\[([^\]\r\n]+)/.exec(raw)?.[1];
-      if (target) targets.add(target.split('::')[0]);
-    } else if (doc.format === 'markdown' && ['image', 'link', 'definition'].includes(node.type) && node.url) targets.add(node.url);
-  });
+    // A source without a possible link opener cannot contribute parsed targets.
+    // Avoid constructing two large ASTs for plain .txt prose and recovery history.
+    } else if ((format === 'org' && doc.source.includes('[['))
+      || (format === 'markdown' && /[\[<]/.test(doc.source)) || formats.length === 1) visitTree(analyzeDocument({ ...doc, format }).tree, (node) => {
+      if (format === 'org' && node.type === 'link') {
+        const raw = doc.source.slice(node.position.start.offset, node.position.end.offset);
+        const target = /^\[\[([^\]\r\n]+)/.exec(raw)?.[1];
+        if (target) targets.add(target.split('::')[0]);
+      } else if (format === 'markdown' && ['image', 'link', 'definition'].includes(node.type) && node.url) targets.add(node.url);
+    });
+  }
   for (const target of targets) {
     if (target.length > 8192) continue;
     if (/^(?:https?:|mailto:|data:)/i.test(target) || target.startsWith('#')) continue;

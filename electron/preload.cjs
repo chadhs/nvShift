@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('nvShift', {
   initial: invoke('app:initial'), chooseLibrary: invoke('library:choose'), search: invoke('library:search'),
   create: invoke('note:create'), open: invoke('note:open'), updateBuffer: invoke('note:update'),
   save: invoke('note:save'), rename: invoke('note:rename'), trash: invoke('note:trash'),
+  setSyntax: invoke('note:syntax'),
   resolveConflict: invoke('note:conflict'), updateSettings: invoke('settings:update'),
   insertImage: invoke('asset:bytes'), insertImagePaths: invoke('asset:paths'),
   startAssetCleanup: invoke('asset:cleanup-start'), cancelAssetCleanup: invoke('asset:cleanup-cancel'),

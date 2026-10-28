@@ -16,6 +16,7 @@ for (const file of [
   'package.json', 'LICENSE', 'README.org', 'THIRD-PARTY-NOTICES.org',
   'dist/index.html', 'dist/document-analysis.cjs', 'dist/asset-references.cjs',
   'electron/main.cjs', 'electron/preload.cjs', 'electron/asset-cleanup.cjs', 'electron/asset-cleanup-worker.cjs',
+  'electron/syntax-detection.cjs', 'electron/syntax-worker.cjs', 'electron/syntax-client.cjs', 'electron/note-syntax-state.cjs',
 ]) assert.ok(files.has(file), `Packaged application is missing ${file}`);
 const manifest = JSON.parse(extractFile(archive, 'package.json').toString());
 assert.equal(manifest.name, 'nvshift');

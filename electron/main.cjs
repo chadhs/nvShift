@@ -175,6 +175,7 @@ function installHandlers() {
   handle('note:open', (id) => library.activate(id));
   handle('note:update', (id, source, clientVersion, baseRevision) => library.updateBuffer(id, source, clientVersion, baseRevision));
   handle('note:save', (id) => library.save(id));
+  handle('note:syntax', (id, mode) => library.setSyntax(id, mode));
   handle('note:rename', (id, title) => library.rename(id, title));
   handle('note:trash', async (id) => { await library.trash(id); return state(); });
   handle('note:conflict', (id, action) => library.resolveConflict(id, action));
