@@ -159,6 +159,27 @@ indentation. Checkbox items continue unchecked. Enter on an empty item removes
 its marker to end the list. This also works in Vim Insert mode and in =.txt=
 notes configured as Org; literal source and example blocks keep ordinary newlines.
 
+* Heading folding
+In Editor and Split views, press =Tab= on a Markdown or Org heading to open or
+close its section. The gutter arrows use the same ranges. Markdown supports
+both =# ATX= and underlined Setext headings; Org supports star headings. Heading
+examples inside literal/code blocks do not create sections. Plain-text notes
+have no heading folding; =.txt= notes follow their detected or selected syntax.
+
+With Vim enabled, =Tab= folding works in Normal mode only, with no pending
+operator or key sequence. Insert and Visual modes retain their existing Tab
+behavior. Space, Shift+Tab, =zz=, and other Vim commands keep their usual
+behavior; =za=, =zo=, and =zc= are not added. Tab outside a heading retains its
+existing behavior. =Cmd/Ctrl+L= returns to library search.
+
+Use View → Folding → Toggle heading from a section's body, or Expand all to
+reveal the whole source. Closing a parent preserves folded child sections.
+Search reveals hidden matches. Folds survive note switches, Editor/Split view
+changes, appearance changes, and Vim toggles during the session. Restart,
+external whole-document replacement, and syntax changes expand the source.
+Folding leaves file contents and text Undo history intact. The rendered preview
+remains expanded.
+
 * Vim mode
 Enable Vim mode in Settings. It starts off. Toggling it preserves text and undo
 history. Normal, Insert, and Visual editing use CodeMirror's Vim extension.

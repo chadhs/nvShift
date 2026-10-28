@@ -130,6 +130,8 @@ export function releaseNotes({ version, repository, source, changes = '', runId 
     '',
     'Markdown, Org, and plain-text .txt notes can share a folder. nvShift detects each .txt note’s syntax from its contents; ambiguous or conflicting text displays as plain text. New .txt note syntax in Settings affects only future notes. The optional per-note syntax control corrects guesses, with choices stored locally across restart and in-app rename. Existing notes need no renaming, conversion, or inserted metadata.',
     '',
+    'Tab on a Markdown or Org heading toggles its section in Editor and Split views, matching the gutter arrows. In Vim, this works in Normal mode only; Space, Shift+Tab, and Insert/Visual behavior are preserved. View → Folding provides Toggle heading and Expand all. Child folds survive closing parents, and the rendered preview stays expanded.',
+    '',
     'The default global shortcut is Cmd/Ctrl+Shift+Space. Closing the window keeps nvShift running in the tray/menu bar; Quit flushes pending edits and exits. Remote images contact their hosts without cookies, authentication, or document referrers. Local notes are not uploaded.',
     '',
     'Use File → Find unused assets to review images in the selected library’s assets folder. Removal is manual and uses OS Trash. Current notes, drafts, and session Undo references are protected; images used only by older backups are listed separately. References in unrelated outside notes cannot be established.',

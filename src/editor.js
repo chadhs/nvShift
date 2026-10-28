@@ -5,9 +5,10 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { markdown } from '@codemirror/lang-markdown';
 import { openSearchPanel } from '@codemirror/search';
 import { tags } from '@lezer/highlight';
-import { CodeMirror, vim, Vim } from '@replit/codemirror-vim';
+import { CodeMirror, getCM, vim, Vim } from '@replit/codemirror-vim';
 import { orgLanguage } from './org-language.js';
 import { insertOrgListItem, orgVimNewline } from './org-editing.js';
+import { headingFolding, toggleHeading, expandAllFolds } from './heading-folding.js';
 
 const defaultVimNewline = CodeMirror.commands.newlineAndIndent;
 CodeMirror.commands.newlineAndIndent = (cm) => orgVimNewline(cm, defaultVimNewline);
@@ -55,14 +56,24 @@ export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFil
   const vimMode = new Compartment();
   const editable = new Compartment();
   const states = new Map();
+  const stateFormats = new Map();
   let currentId = null;
   let format = 'plain';
   let settings = { vimMode: false };
   let applying = false;
-  const languageExtension = (syntax) => syntax === 'org'
+  const languageExtension = (syntax) => [headingFolding(syntax), syntax === 'org'
     ? [orgLanguage, Prec.high(keymap.of([{ key: 'Enter', run: insertOrgListItem }]))]
-    : syntax === 'markdown' ? markdown() : [];
+    : syntax === 'markdown' ? markdown() : []];
   const state = (source = '') => EditorState.create({ doc: source, extensions: [
+    Prec.highest(EditorView.domEventHandlers({ keydown: (event, target) => {
+      if (event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing || target.composing) return false;
+      if (settings.vimMode) {
+        const mode = getCM(target)?.state.vim, input = mode?.inputState;
+        if (!mode || mode.insertMode || mode.insertModeReturn || mode.visualMode || input?.operator || input?.keyBuffer?.length
+          || input?.prefixRepeat?.length || input?.motionRepeat?.length || input?.registerName) return false;
+      }
+      return toggleHeading(target);
+    } })),
     vimMode.of(settings.vimMode ? vim() : []),
     basicSetup,
     language.of(languageExtension(format)),
@@ -73,7 +84,7 @@ export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFil
     keymap.of([{ key: 'Mod-s', run: () => { onSave(); return true; } }]),
     EditorView.contentAttributes.of({ 'aria-label': 'Note contents', spellcheck: 'false' }),
     EditorView.updateListener.of((update) => {
-      if (currentId) states.set(currentId, update.state);
+      if (currentId) { states.set(currentId, update.state); stateFormats.set(currentId, format); }
       if (update.docChanged && !applying && currentId) {
         onHistory(currentId, update.startState.doc.toString());
         onChange(update.state.doc.toString());
@@ -116,19 +127,24 @@ export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFil
         currentId = doc.id;
         format = doc.format;
         const cached = states.get(doc.id);
+        const cachedFormat = stateFormats.get(doc.id);
         view.setState(cached ?? state(doc.source));
+        if (cached && cachedFormat !== format) expandAllFolds(view);
         view.dispatch({ effects: [language.reconfigure(languageExtension(format)), vimMode.reconfigure(settings.vimMode ? vim() : [])] });
       }
       if (format !== doc.format) {
+        expandAllFolds(view);
         format = doc.format;
         view.dispatch({ effects: language.reconfigure(languageExtension(format)) });
       }
       if (view.state.doc.toString() !== doc.source) {
+        expandAllFolds(view);
         const anchor = Math.min(view.state.selection.main.anchor, doc.source.length);
         const head = Math.min(view.state.selection.main.head, doc.source.length);
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: doc.source }, selection: { anchor, head }, annotations: Transaction.addToHistory.of(false) });
       }
       states.set(doc.id, view.state);
+      stateFormats.set(doc.id, format);
     } finally { applying = false; }
   }
   function focusEditor() {
@@ -150,10 +166,12 @@ export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFil
       if (bookmark.focused) focusEditor();
     },
     updateSettings: applySettings,
+    toggleHeading: () => toggleHeading(view, { containing: true }),
+    expandFolds: () => expandAllFolds(view),
     source: () => view.state.doc.toString(),
     focus: focusEditor,
     find: () => { openSearchPanel(view); view.dom.querySelector('.cm-search input')?.focus(); },
     insert: (text) => { view.dispatch(view.state.replaceSelection(text), { scrollIntoView: true }); view.focus(); },
-    destroy: () => { view.destroy(); states.clear(); },
+    destroy: () => { view.destroy(); states.clear(); stateFormats.clear(); },
   };
 }

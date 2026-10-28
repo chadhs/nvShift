@@ -1,5 +1,5 @@
 import { build } from 'vite';
-import { mkdtemp, copyFile, rm } from 'node:fs/promises';
+import { mkdtemp, copyFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -24,7 +24,9 @@ await build({
   },
 });
 // Exercise the shipped file outside the repository, without DOM globals or dependencies.
-const directory = await mkdtemp(path.join(tmpdir(), 'markup-preview-analysis-'));
+// Windows runner temp paths can use an 8.3 alias (RUNNER~1). Candidates and
+// resolved references must share the same canonical root, as in the real library.
+const directory = await realpath(await mkdtemp(path.join(tmpdir(), 'markup-preview-analysis-')));
 try {
   const bundle = path.join(directory, 'analysis.cjs');
   await copyFile('dist/document-analysis.cjs', bundle);

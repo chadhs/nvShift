@@ -117,6 +117,152 @@ async function doneSettings() {
   if (await window.locator('#settings-dialog').isVisible()) await window.locator('#settings-done').click();
   await expect(window.locator('#settings-dialog')).toBeHidden();
 }
+const foldedSource = () => window.locator('#editor .cm-foldPlaceholder');
+async function sourceLine(text) {
+  const line = source().locator('.cm-line').filter({ hasText: text }).first();
+  await expect(line).toBeVisible();
+  await line.click();
+  await window.keyboard.press('Home');
+}
+async function foldingMenu(label) {
+  await app.evaluate(({ Menu }, label) => {
+    const view = Menu.getApplicationMenu()?.items.find((item) => item.label.replaceAll('&', '') === 'View');
+    const folding = view?.submenu?.items.find((item) => item.label === 'Folding');
+    const action = folding?.submenu?.items.find((item) => item.label === label);
+    if (!action || !action.enabled) throw new Error(`Folding action is unavailable: ${label}`);
+    action.click();
+  }, label);
+}
+const sourceCaret = () => window.evaluate(() => {
+  const selection = getSelection();
+  const element = selection?.focusNode?.nodeType === Node.ELEMENT_NODE ? selection.focusNode : selection?.focusNode?.parentElement;
+  const line = element?.closest('.cm-line');
+  if (!line) return null;
+  const range = document.createRange(); range.selectNodeContents(line); range.setEnd(selection.focusNode, selection.focusOffset);
+  return { line: line.textContent, column: range.toString().length };
+});
+async function checkHeadingFolding() {
+  const markdown = '# Fold root\nRoot body marker.\n\n## Fold child\nChild needle marker.\n\n### Fold grandchild\nGrandchild body.\n\n## Fold sibling\nSibling body.\n\n# Fold next\nNext body.';
+  const org = '#+TITLE: Fold Org\n* Org root\nOrg body marker.\n** Org child\nOrg child body.\n#+begin_src text\n* Fake heading\n#+end_src\n* Org next\nTail.';
+  await writeFile(path.join(root, 'Folding.md'), markdown);
+  await writeFile(path.join(root, 'Folding Org.org'), org);
+  await writeFile(path.join(root, 'Folding Setext.md'), 'Setext root\n===========\nSetext body marker.\n\nSetext child\n------------\nChild body.');
+  await writeFile(path.join(root, 'Folding Text.txt'), '#+TITLE: Fold text\n* Text root\nText body.\n* Text next\nEnd.');
+  await openNote('Folding');
+  await window.locator('#view-split').click();
+  await expect(source()).toContainText('Root body marker.');
+  await sourceLine('# Fold root');
+  await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(1);
+  await expect(source()).not.toContainText('Root body marker.');
+  await expect(window.locator('#content')).toContainText('Root body marker.');
+  expect(await buffer()).toBe(markdown);
+  await expect(window.locator('#save-status')).toHaveText('Saved');
+  // The existing gutter arrow opens exactly the same range as Tab.
+  await window.locator('#editor .cm-foldGutter span[title="Unfold line"]:visible').first().click();
+  await expect(foldedSource()).toHaveCount(0);
+  await sourceLine('## Fold child'); await window.keyboard.press('Tab');
+  await expect(source()).not.toContainText('Child needle marker.');
+  await sourceLine('# Fold root'); await window.keyboard.press('Tab');
+  await expect(source()).not.toContainText('## Fold child');
+  await window.keyboard.press('Tab');
+  await expect(source()).toContainText('## Fold child');
+  await expect(source()).not.toContainText('Child needle marker.');
+  await expect(foldedSource()).toHaveCount(1);
+  await openNote('Folding Org'); await openNote('Folding');
+  await expect(foldedSource()).toHaveCount(1);
+  const mode = (await window.evaluate(() => window.nvShift.initial())).settings.mode;
+  await setSetting('#appearance-mode', mode === 'dark' ? 'light' : 'dark'); await doneSettings();
+  await expect(foldedSource()).toHaveCount(1);
+  await setSetting('#appearance-mode', mode); await doneSettings();
+  await window.locator('#view-editor').click(); await window.locator('#view-split').click();
+  await expect(foldedSource()).toHaveCount(1);
+  await setSetting('#vim-mode', true); await doneSettings();
+  await expect(foldedSource()).toHaveCount(1);
+  await setSetting('#vim-mode', false); await doneSettings();
+  await expect(foldedSource()).toHaveCount(1);
+  await foldingMenu('Expand all'); await expect(foldedSource()).toHaveCount(0);
+  await sourceLine('Root body marker.'); await foldingMenu('Toggle heading');
+  await expect(foldedSource()).toHaveCount(1);
+  await expect.poll(sourceCaret).toMatchObject({ line: expect.stringContaining('# Fold root') });
+  // Document search reveals a selected match inside the collapsed section.
+  await window.keyboard.press(`${modifier}+f`);
+  await window.locator('#editor .cm-search input[name="search"]').fill('Child needle marker.');
+  // The native panel commits on keyup/change; fill() alone emits only input.
+  await window.locator('#editor .cm-search input[name="search"]').press('End');
+  await window.locator('#editor .cm-search input[name="search"]').press('Enter');
+  await expect(source()).toContainText('Child needle marker.');
+  await window.keyboard.press('Escape');
+  await foldingMenu('Expand all');
+  await sourceLine('# Fold root');
+  await window.keyboard.press('Shift+ArrowRight'); await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(0);
+  await sourceLine('# Fold root'); await window.keyboard.press('Shift+Tab');
+  await expect(foldedSource()).toHaveCount(0);
+  await sourceLine('Root body marker.'); await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(0);
+  // Presentation changes never consume a text Undo entry.
+  await sourceLine('# Fold root'); await window.keyboard.press('End');
+  await window.keyboard.insertText(' edit'); await expect.poll(buffer).toBe(markdown.replace('# Fold root', '# Fold root edit'));
+  await window.keyboard.press('Tab'); await expect(foldedSource()).toHaveCount(1);
+  await window.keyboard.press(`${modifier}+z`); await expect.poll(buffer).toBe(markdown);
+  await foldingMenu('Expand all');
+  await setSetting('#vim-mode', true); await doneSettings();
+  await source().focus(); await window.keyboard.press('Escape'); await window.keyboard.type('gg0');
+  await window.keyboard.press('Tab'); await expect(foldedSource()).toHaveCount(1);
+  await window.keyboard.press('Tab'); await expect(foldedSource()).toHaveCount(0);
+  await window.keyboard.type('gg0');
+  await expect.poll(sourceCaret).toMatchObject({ column: 0 });
+  await window.keyboard.press('Space'); await expect.poll(sourceCaret).toMatchObject({ column: 1 });
+  await window.keyboard.type('zz'); await expect(foldedSource()).toHaveCount(0);
+  await window.keyboard.type('gg0d'); await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(0);
+  await source().focus(); await window.keyboard.press('Escape');
+  expect(await buffer()).toBe(markdown);
+  await window.keyboard.type('gg0v'); await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(0);
+  await source().focus(); await window.keyboard.press('Escape');
+  await window.keyboard.type('gg0i'); await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(0);
+  await source().focus(); await window.keyboard.press('Escape');
+  await window.keyboard.type('gg0i');
+  // Dispatch Vim Ctrl+O directly so Electron's Ctrl+O folder accelerator on
+  // Linux/Windows cannot intercept this transient Normal-mode fixture.
+  await source().evaluate((element) => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', code: 'KeyO', ctrlKey: true, bubbles: true, cancelable: true })));
+  await window.keyboard.press('Tab'); await expect(foldedSource()).toHaveCount(0);
+  await source().focus(); await window.keyboard.press('Escape');
+  await setSetting('#vim-mode', false); await doneSettings();
+  await replaceSource(markdown); await waitSaved();
+  await sourceLine('# Fold root'); await window.keyboard.press('Tab');
+  await window.screenshot({ path: `test-results/${executablePath ? 'packaged' : 'desktop'}-heading-folding.png` });
+  await writeFile(path.join(root, 'Folding.md'), markdown.replace('Root body marker.', 'Externally changed body.'));
+  await expect(source()).toContainText('Externally changed body.', { timeout: 15000 });
+  await expect(foldedSource()).toHaveCount(0);
+  await openNote('Folding Org');
+  await expect(source()).toContainText('Org body marker.');
+  await window.locator('#editor .cm-foldGutter span[title="Fold line"]:visible').first().click();
+  await expect(source()).not.toContainText('Org body marker.');
+  await sourceLine('* Org root'); await window.keyboard.press('Tab');
+  await expect(source()).toContainText('Org body marker.');
+  await sourceLine('* Fake heading'); await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(0);
+  expect(await buffer()).toBe(org);
+  await openNote('Folding Setext');
+  await sourceLine('Setext root'); await window.keyboard.press('Tab');
+  await expect(source()).not.toContainText('Setext body marker.');
+  await foldingMenu('Expand all');
+  await openNote('Folding Text'); await expectSyntax('org');
+  await sourceLine('* Text root'); await window.keyboard.press('Tab');
+  await expect(source()).not.toContainText('Text body.');
+  await window.locator('#syntax-select').selectOption('plain'); await expectSyntax('plain', 'plain');
+  await expect(foldedSource()).toHaveCount(0); await expect(source()).toContainText('Text body.');
+  await sourceLine('* Text root'); await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(0);
+  // Leave a saved fold in the session to prove a restart begins expanded.
+  await openNote('Folding'); await sourceLine('# Fold root'); await window.keyboard.press('Tab');
+  await expect(foldedSource()).toHaveCount(1);
+  await waitSaved();
+}
 async function waitSaved() { await expect(window.locator('#save-status')).toHaveText('Saved', { timeout: 15000 }); }
 const cleanupItem = (name) => window.locator(`#cleanup-dialog .cleanup-item[data-name=${JSON.stringify(name)}]`);
 const fileExists = (file) => stat(file).then(() => true, (error) => { if (error.code === 'ENOENT') return false; throw error; });
@@ -572,6 +718,8 @@ try {
   await expect(window.locator('#document-title')).toHaveText('Linked text');
   await expect(window.locator('#content .image-preview[data-loaded="true"]')).toHaveCount(1, { timeout: 15000 });
 
+  await checkHeadingFolding();
+
   await window.keyboard.press(`${modifier}+l`);
   await window.locator('#library-search').fill('A new thought');
   await expect(window.locator('#results .create-result')).toBeVisible();
@@ -795,6 +943,9 @@ try {
   expect(restored.settings.sansSerifHeadings).toBe(true);
   expect(restored.settings.contentWidth).toBe('full');
   expect(restored.settings.filenameHeadings).toBe(true);
+  await openNote('Folding');
+  await expect(foldedSource()).toHaveCount(0);
+  await expect(source()).toContainText('Externally changed body.');
   await openNote('Renamed Org text');
   await expectSyntax('org');
   await openNote('syntax');
@@ -829,7 +980,7 @@ try {
   await expect(source()).toContainText('Renderer recovery marker', { timeout: 15000 });
   await waitSaved();
   expect(errors).toEqual([]);
-  console.log(`nvShift ${executablePath ? 'packaged' : 'development'} smoke passed: recursive search, arrow-result browsing/focus/flush/latest selection, content headings/unsaved titles/filename preference, keyboard creation, Org list continuation/Vim/:w/undo, all themes, mixed .txt detection/new-note defaults/manual overrides/Undo/Vim/restart, images, asset cleanup/recovery/Undo/Trash/revalidation, Mermaid, external saves/conflicts, rename, settings restart, sandbox, shortcut errors, background/relaunch.`);
+  console.log(`nvShift ${executablePath ? 'packaged' : 'development'} smoke passed: recursive search, arrow-result browsing/focus/flush/latest selection, content headings/unsaved titles/filename preference, keyboard creation, Org list continuation/Vim/:w/undo, all themes, mixed .txt detection/new-note defaults/manual overrides/Undo/Vim/restart, heading folding/Tab/gutters/Vim/search/state/restart, images, asset cleanup/recovery/Undo/Trash/revalidation, Mermaid, external saves/conflicts, rename, settings restart, sandbox, shortcut errors, background/relaunch.`);
 } catch (error) {
   console.error('Smoke failure details:', JSON.stringify({ errors, state: await window?.evaluate(async () => {
     const initial = await window.nvShift.initial().then((state) => ({ library: state.library, document: state.document?.name })).catch((failure) => ({ error: failure.message }));

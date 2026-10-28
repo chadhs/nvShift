@@ -1,6 +1,6 @@
 #+title: nvShift releases
 
-* v0.2.0: automatic syntax for mixed .txt notes
+* v0.2.0: automatic .txt syntax and heading folding
 Use existing Markdown, Org, and plain-text =.txt= notes together without
 renaming or converting them. nvShift detects syntax from each note's contents;
 ambiguous or conflicting content stays readable as plain text.
@@ -13,8 +13,13 @@ ambiguous or conflicting content stays readable as plain text.
   insertion together, preserving selection, Undo, and Vim state.
 - Asset cleanup checks all three interpretations of =.txt= references. Drafts
   are journaled before detection, and detector failures preserve editing/saving.
+- Tab and gutter arrows toggle Markdown and Org heading sections in Editor
+  and Split views. Vim supports Tab in Normal mode; Insert/Visual behavior,
+  Space, Shift+Tab, and existing Vim commands are preserved. View → Folding
+  provides Toggle heading and Expand all. Child folds survive closing parents,
+  and source folding leaves the preview expanded.
 
-Local macOS validation passes 231 tests, both benchmarks, development and
+Local macOS validation passes 245 tests, search and large-outline checks, development and
 packaged Electron smoke, signatures, package contents, and license notices.
 The release's linked Actions run records native hosted validation.
 

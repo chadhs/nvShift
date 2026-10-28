@@ -252,6 +252,10 @@ function installMenu() {
     { label: 'View', submenu: [
       { label: 'Find in note', accelerator: 'CmdOrCtrl+F', click: fire('find') },
       { label: 'Cycle editor / split / preview', accelerator: 'CmdOrCtrl+Shift+P', click: fire('cycle-view') },
+      { label: 'Folding', submenu: [
+        { label: 'Toggle heading', click: fire('toggle-heading') },
+        { label: 'Expand all', click: fire('expand-folds') },
+      ] },
       { type: 'separator' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'resetZoom' }, { role: 'togglefullscreen' },
       ...(!app.isPackaged ? [{ role: 'toggleDevTools' }] : []),
     ] },

@@ -1,5 +1,48 @@
 #+title: nvShift validation
 
+* Heading folding release preparation
+These results cover the heading folding source prepared for v0.2.0 alongside
+automatic .txt syntax detection. On macOS arm64, 2026-10-27, all
+245 Node tests and the production renderer/analysis builds pass. Fourteen new
+folding cases cover native Markdown and Setext ranges, Org nesting and skipped
+levels, literal blocks, empty sections/titles, Unicode, trailing body whitespace,
+child-fold retention, text Undo, structural-edit invalidation, and selection
+reveal. Folds are cached per immutable document and resolved syntax.
+
+Full development Electron smoke passes Tab/gutter parity, menu actions from
+body text, search into hidden content, note/view/theme/Vim state retention,
+external and syntax resets, and expanded source after restart. Vim cases cover
+Normal-mode Tab, Insert/Visual/temporary Normal mode, pending operators,
+Space/Shift+Tab/zz, Undo, and :w. The preview remains expanded. The original
+215-package runtime notice inventory is unchanged and reproducible.
+
+The 10,000-note search benchmark records 840.18 ms indexing, 13.30 ms median,
+and 21.82 ms p95, below the 100 ms target. The focused outline test builds and
+queries all 10,000 heading gutters, then measures repeated tail edits with an
+existing fold. On the local runner, cold outline/gutter work took 14.4 ms for
+Org and 70.5 ms for Markdown; average edited-document work took 3.8 ms and
+39.2 ms respectively. These timings describe large synthetic outlines and vary
+with runner load; they do not include Electron painting.
+
+The local arm64 DMG and ZIP pass =npm run test:package:mac=: the extracted app
+runs the full Electron smoke outside the repository, both app copies pass
+strict ad-hoc signature checks, and package identity, BSD-3-Clause licensing,
+dependency notices, and Electron notices are verified. SHA-256 checksums were
+regenerated. Earlier local binaries are archived under ignored
+=release/development-before-heading-folds-*/=. These development packages retain
+the local 0.1.0 version and are not public release artifacts.
+
+The release workflow validates this source on native macOS, Linux, and Windows
+runners before publication. Hosted results remain pending until that run
+completes. Intel Mac, interactive Wayland, and physical desktop checks remain
+separate pending acceptance work.
+
+The earlier automatic-syntax release run passed macOS and Linux, but its
+Windows standalone reference-collector fixture failed because the temporary
+directory used an 8.3 alias while resolved resources used canonical paths.
+The fixture now canonicalizes its root before constructing candidate paths,
+matching the production library. Native Windows confirmation awaits the new run.
+
 * Automatic .txt syntax release preparation
 These results cover the automatic .txt syntax source prepared for v0.2.0, based
 on public v0.1.0. The release workflow validates the committed source on native

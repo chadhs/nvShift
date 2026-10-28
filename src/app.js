@@ -823,6 +823,8 @@ function commandAction(event) {
   else if (command === 'asset-cleanup') assetCleanup.open();
   else if (command === 'find') showFind();
   else if (command === 'save') run(saveCurrent());
+  else if (command === 'toggle-heading' && current && settings.viewMode !== 'preview') { if (editor.toggleHeading()) editor.focus(); }
+  else if (command === 'expand-folds' && current && settings.viewMode !== 'preview') { editor.expandFolds(); editor.focus(); }
   else if (command === 'cycle-view') run(setView(['editor', 'split', 'preview'][(['editor', 'split', 'preview'].indexOf(settings.viewMode) + 1) % 3]));
   else if (command === 'flush') {
     void flushDrafts().then(() => api.rendererFlushed?.(event.requestId)).catch((reason) => { reportError(reason); api.rendererFlushed?.(event.requestId, reason.message); });
