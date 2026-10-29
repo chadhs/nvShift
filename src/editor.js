@@ -1,6 +1,7 @@
 import { basicSetup } from 'codemirror';
 import { Compartment, EditorState, Prec, Transaction } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
+import { indentMore, indentLess } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { markdown } from '@codemirror/lang-markdown';
 import { openSearchPanel } from '@codemirror/search';
@@ -12,6 +13,9 @@ import { headingFolding, toggleHeading, expandAllFolds } from './heading-folding
 
 const defaultVimNewline = CodeMirror.commands.newlineAndIndent;
 CodeMirror.commands.newlineAndIndent = (cm) => orgVimNewline(cm, defaultVimNewline);
+
+const editorTab = (event, view) => event.key === 'Tab' && event.target === view.contentDOM
+  && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing && !view.composing;
 
 const noteHighlight = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--syntax-title)', fontWeight: '650' },
@@ -66,14 +70,24 @@ export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFil
     : syntax === 'markdown' ? markdown() : []];
   const state = (source = '') => EditorState.create({ doc: source, extensions: [
     Prec.highest(EditorView.domEventHandlers({ keydown: (event, target) => {
-      if (event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing || target.composing) return false;
+      if (!editorTab(event, target)) return false;
       if (settings.vimMode) {
         const mode = getCM(target)?.state.vim, input = mode?.inputState;
-        if (!mode || mode.insertMode || mode.insertModeReturn || mode.visualMode || input?.operator || input?.keyBuffer?.length
+        if (!mode || mode.insertModeReturn || mode.visualMode || input?.operator || input?.keyBuffer?.length
           || input?.prefixRepeat?.length || input?.motionRepeat?.length || input?.registerName) return false;
+        if (!mode.insertMode) {
+          if (!event.shiftKey) toggleHeading(target);
+          return true;
+        }
+      } else if (!event.shiftKey && toggleHeading(target)) {
+        return true;
       }
-      return toggleHeading(target);
+      (event.shiftKey ? indentLess : indentMore)(target);
+      return true;
     } })),
+    // Vim gets first refusal in Visual mode and pending commands. CodeMirror
+    // bypasses all key handlers itself when explicit Tab-focus mode is active.
+    Prec.lowest(EditorView.domEventHandlers({ keydown: (event, target) => editorTab(event, target) })),
     vimMode.of(settings.vimMode ? vim() : []),
     basicSetup,
     language.of(languageExtension(format)),

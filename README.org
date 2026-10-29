@@ -166,11 +166,19 @@ both =# ATX= and underlined Setext headings; Org supports star headings. Heading
 examples inside literal/code blocks do not create sections. Plain-text notes
 have no heading folding; =.txt= notes follow their detected or selected syntax.
 
-With Vim enabled, =Tab= folding works in Normal mode only, with no pending
-operator or key sequence. Insert and Visual modes retain their existing Tab
-behavior. Space, Shift+Tab, =zz=, and other Vim commands keep their usual
-behavior; =za=, =zo=, and =zc= are not added. Tab outside a heading retains its
-existing behavior. =Cmd/Ctrl+L= returns to library search.
+In regular editing, =Tab= folds a heading when the selection is empty and the
+heading has a body. Otherwise it indents the current or selected lines by one
+level. =Shift+Tab= outdents those lines. Vim Insert mode also uses =Tab= and
+=Shift+Tab= to indent and outdent lines.
+
+With Vim enabled, =Tab= folding works in idle Normal mode only, with no pending
+operator or key sequence. Elsewhere in idle Normal mode, =Tab= and =Shift+Tab=
+do nothing. Visual mode, pending commands, and temporary Normal mode keep Vim's
+Tab handling; unhandled Tab presses stay in the editor. Space, =zz=, and other
+Vim commands keep their usual behavior; =za=, =zo=, and =zc= are not added.
+
+=Cmd/Ctrl+L= returns to library search, where =Tab= and =Shift+Tab= navigate
+controls. Search fields and dialogs retain normal Tab navigation.
 
 Use View → Folding → Toggle heading from a section's body, or Expand all to
 reveal the whole source. Closing a parent preserves folded child sections.

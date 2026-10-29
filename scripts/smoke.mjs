@@ -141,6 +141,104 @@ const sourceCaret = () => window.evaluate(() => {
   const range = document.createRange(); range.selectNodeContents(line); range.setEnd(selection.focusNode, selection.focusOffset);
   return { line: line.textContent, column: range.toString().length };
 });
+async function editorTab(key, expected) {
+  await window.keyboard.press(key);
+  await expect(source()).toBeFocused();
+  await expect.poll(buffer).toBe(expected);
+}
+async function searchExit() {
+  await window.keyboard.press(`${modifier}+l`);
+  await expect(searchField()).toBeFocused();
+  await window.keyboard.press('Tab');
+  await expect(window.locator('#create-extension')).toBeFocused();
+  await window.keyboard.press('Shift+Tab');
+  await expect(searchField()).toBeFocused();
+}
+async function checkEditorTabs() {
+  const text = 'First line\nSecond line';
+  await writeFile(path.join(root, 'Keyboard Tabs.txt'), text);
+  await openNote('Keyboard Tabs');
+  await window.locator('#view-editor').click();
+  await window.locator('#syntax-select').selectOption('plain');
+  await expectSyntax('plain', 'plain');
+  await sourceLine('First line');
+  // Indent the whole line even when the caret is in its middle.
+  await window.keyboard.press('ArrowRight');
+  await editorTab('Tab', '  First line\nSecond line');
+  await window.keyboard.press(`${modifier}+z`); await expect.poll(buffer).toBe(text);
+  await editorTab('Tab', '  First line\nSecond line');
+  await editorTab('Shift+Tab', text);
+  await editorTab('Shift+Tab', text); // An outdent with no whitespace still retains focus.
+  await sourceLine('First line');
+  await window.keyboard.press('Shift+ArrowDown'); await window.keyboard.press('Shift+End');
+  await editorTab('Tab', '  First line\n  Second line');
+  await editorTab('Shift+Tab', text);
+  await searchExit();
+
+  await window.locator('#appearance-button').click();
+  await expect(window.locator('#appearance-mode')).toBeFocused();
+  await window.locator('#vim-mode').focus();
+  await expect(window.locator('#vim-mode')).toBeFocused();
+  await window.keyboard.press('Tab'); await expect(window.locator('#default-extension')).toBeFocused();
+  await window.keyboard.press('Shift+Tab'); await expect(window.locator('#vim-mode')).toBeFocused();
+  await doneSettings();
+  await source().focus(); await window.keyboard.press(`${modifier}+f`);
+  const find = window.locator('#editor .cm-search input[name="search"]');
+  await expect(find).toBeFocused();
+  await window.keyboard.press('Tab'); await expect(find).not.toBeFocused();
+  await expect(source()).not.toBeFocused();
+  await window.keyboard.press('Shift+Tab'); await expect(find).toBeFocused();
+  await window.keyboard.press('Escape');
+
+  // A heading without a body and heading examples in code blocks indent normally.
+  await window.locator('#syntax-select').selectOption('markdown'); await expectSyntax('markdown', 'markdown');
+  await replaceSource('# Empty heading'); await sourceLine('# Empty heading');
+  await editorTab('Tab', '  # Empty heading'); await expect(foldedSource()).toHaveCount(0);
+  await editorTab('Shift+Tab', '# Empty heading');
+  const literal = '```text\n# Literal heading\n```';
+  await replaceSource(literal); await sourceLine('# Literal heading');
+  await editorTab('Tab', literal.replace('# Literal', '  # Literal')); await expect(foldedSource()).toHaveCount(0);
+  await window.keyboard.press(`${modifier}+z`); await expect.poll(buffer).toBe(literal);
+
+  // Use real keypresses: CodeMirror checks keyCode before invoking DOM handlers.
+  const focusModeKey = process.platform === 'darwin' ? 'Alt+Shift+m' : 'Control+m';
+  await sourceLine('# Literal heading');
+  await window.keyboard.press(focusModeKey); await window.keyboard.press('Tab');
+  await expect(source()).not.toBeFocused(); expect(await buffer()).toBe(literal);
+  await source().focus(); await window.keyboard.press(focusModeKey);
+  await editorTab('Tab', literal.replace('# Literal', '  # Literal'));
+  await editorTab('Shift+Tab', literal);
+  await window.keyboard.press('Escape'); await window.keyboard.press('Shift+Tab');
+  await expect(source()).not.toBeFocused(); expect(await buffer()).toBe(literal);
+
+  await replaceSource(text);
+  await setSetting('#vim-mode', true); await doneSettings();
+  await source().focus(); await window.keyboard.press('Escape'); await window.keyboard.type('gg0');
+  const caret = await sourceCaret();
+  await editorTab('Tab', text); await expect.poll(sourceCaret).toEqual(caret);
+  await editorTab('Shift+Tab', text); await expect.poll(sourceCaret).toEqual(caret);
+  await searchExit();
+  await source().focus(); await window.keyboard.type('gg0i');
+  await editorTab('Tab', '  First line\nSecond line');
+  await window.keyboard.press('Escape'); await window.keyboard.type('u'); await expect.poll(buffer).toBe(text);
+  await window.keyboard.type('gg0i');
+  await editorTab('Tab', '  First line\nSecond line');
+  await editorTab('Shift+Tab', text); await editorTab('Shift+Tab', text);
+  // Insert-mode register selection is a pending Vim command too.
+  await window.keyboard.press('Control+r'); await editorTab('Tab', text);
+  await window.keyboard.press('Control+r'); await editorTab('Shift+Tab', text);
+  await searchExit();
+  await source().focus(); await window.keyboard.press('Escape');
+  // Vim command prompts retain their own Tab handling.
+  await window.keyboard.type(':');
+  const prompt = window.locator('#editor .cm-vim-panel input');
+  await expect(prompt).toBeFocused();
+  await window.keyboard.press('Tab');
+  expect(await buffer()).toBe(text);
+  await window.keyboard.press('Escape');
+  await setSetting('#vim-mode', false); await doneSettings();
+  await waitSaved();
+}
 async function checkHeadingFolding() {
   const markdown = '# Fold root\nRoot body marker.\n\n## Fold child\nChild needle marker.\n\n### Fold grandchild\nGrandchild body.\n\n## Fold sibling\nSibling body.\n\n# Fold next\nNext body.';
   const org = '#+TITLE: Fold Org\n* Org root\nOrg body marker.\n** Org child\nOrg child body.\n#+begin_src text\n* Fake heading\n#+end_src\n* Org next\nTail.';
@@ -153,6 +251,7 @@ async function checkHeadingFolding() {
   await expect(source()).toContainText('Root body marker.');
   await sourceLine('# Fold root');
   await window.keyboard.press('Tab');
+  await expect(source()).toBeFocused();
   await expect(foldedSource()).toHaveCount(1);
   await expect(source()).not.toContainText('Root body marker.');
   await expect(window.locator('#content')).toContainText('Root body marker.');
@@ -197,10 +296,16 @@ async function checkHeadingFolding() {
   await sourceLine('# Fold root');
   await window.keyboard.press('Shift+ArrowRight'); await window.keyboard.press('Tab');
   await expect(foldedSource()).toHaveCount(0);
+  await expect(source()).toBeFocused();
+  await expect.poll(buffer).toBe(markdown.replace('# Fold root', '  # Fold root'));
+  await window.keyboard.press(`${modifier}+z`); await expect.poll(buffer).toBe(markdown);
   await sourceLine('# Fold root'); await window.keyboard.press('Shift+Tab');
   await expect(foldedSource()).toHaveCount(0);
   await sourceLine('Root body marker.'); await window.keyboard.press('Tab');
   await expect(foldedSource()).toHaveCount(0);
+  await expect(source()).toBeFocused();
+  await expect.poll(buffer).toBe(markdown.replace('Root body marker.', '  Root body marker.'));
+  await window.keyboard.press(`${modifier}+z`); await expect.poll(buffer).toBe(markdown);
   // Presentation changes never consume a text Undo entry.
   await sourceLine('# Fold root'); await window.keyboard.press('End');
   await window.keyboard.insertText(' edit'); await expect.poll(buffer).toBe(markdown.replace('# Fold root', '# Fold root edit'));
@@ -217,19 +322,25 @@ async function checkHeadingFolding() {
   await window.keyboard.type('zz'); await expect(foldedSource()).toHaveCount(0);
   await window.keyboard.type('gg0d'); await window.keyboard.press('Tab');
   await expect(foldedSource()).toHaveCount(0);
+  await expect(source()).toBeFocused();
   await source().focus(); await window.keyboard.press('Escape');
   expect(await buffer()).toBe(markdown);
   await window.keyboard.type('gg0v'); await window.keyboard.press('Tab');
   await expect(foldedSource()).toHaveCount(0);
+  await expect(source()).toBeFocused(); expect(await buffer()).toBe(markdown);
   await source().focus(); await window.keyboard.press('Escape');
   await window.keyboard.type('gg0i'); await window.keyboard.press('Tab');
   await expect(foldedSource()).toHaveCount(0);
+  await expect(source()).toBeFocused();
+  await expect.poll(buffer).toBe(markdown.replace('# Fold root', '  # Fold root'));
   await source().focus(); await window.keyboard.press('Escape');
+  await window.keyboard.type('u'); await expect.poll(buffer).toBe(markdown);
   await window.keyboard.type('gg0i');
   // Dispatch Vim Ctrl+O directly so Electron's Ctrl+O folder accelerator on
   // Linux/Windows cannot intercept this transient Normal-mode fixture.
   await source().evaluate((element) => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', code: 'KeyO', ctrlKey: true, bubbles: true, cancelable: true })));
   await window.keyboard.press('Tab'); await expect(foldedSource()).toHaveCount(0);
+  await expect(source()).toBeFocused(); expect(await buffer()).toBe(markdown);
   await source().focus(); await window.keyboard.press('Escape');
   await setSetting('#vim-mode', false); await doneSettings();
   await replaceSource(markdown); await waitSaved();
@@ -244,12 +355,18 @@ async function checkHeadingFolding() {
   await expect(source()).not.toContainText('Org body marker.');
   await sourceLine('* Org root'); await window.keyboard.press('Tab');
   await expect(source()).toContainText('Org body marker.');
+  await expect(source()).toBeFocused(); expect(await buffer()).toBe(org);
   await sourceLine('* Fake heading'); await window.keyboard.press('Tab');
   await expect(foldedSource()).toHaveCount(0);
-  expect(await buffer()).toBe(org);
+  await expect(source()).toBeFocused();
+  await expect.poll(buffer).toBe(org.replace('* Fake heading', '  * Fake heading'));
+  await window.keyboard.press(`${modifier}+z`);
+  await expect.poll(buffer).toBe(org);
   await openNote('Folding Setext');
+  const setext = await buffer();
   await sourceLine('Setext root'); await window.keyboard.press('Tab');
   await expect(source()).not.toContainText('Setext body marker.');
+  await expect(source()).toBeFocused(); expect(await buffer()).toBe(setext);
   await foldingMenu('Expand all');
   await openNote('Folding Text'); await expectSyntax('org');
   await sourceLine('* Text root'); await window.keyboard.press('Tab');
@@ -258,6 +375,8 @@ async function checkHeadingFolding() {
   await expect(foldedSource()).toHaveCount(0); await expect(source()).toContainText('Text body.');
   await sourceLine('* Text root'); await window.keyboard.press('Tab');
   await expect(foldedSource()).toHaveCount(0);
+  await expect(source()).toBeFocused();
+  await window.keyboard.press('Shift+Tab');
   // Leave a saved fold in the session to prove a restart begins expanded.
   await openNote('Folding'); await sourceLine('# Fold root'); await window.keyboard.press('Tab');
   await expect(foldedSource()).toHaveCount(1);
@@ -718,6 +837,7 @@ try {
   await expect(window.locator('#document-title')).toHaveText('Linked text');
   await expect(window.locator('#content .image-preview[data-loaded="true"]')).toHaveCount(1, { timeout: 15000 });
 
+  await checkEditorTabs();
   await checkHeadingFolding();
 
   await window.keyboard.press(`${modifier}+l`);
