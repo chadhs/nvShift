@@ -69,10 +69,11 @@ test('creation is exclusive, validates portable names, and keeps the note ID thr
 test('.txt syntax is detected per note and folder preferences affect only creation', async (t) => {
   const f = await fixture(t, { 'a.txt': '# Heading\n', 'b.txt': '#+TITLE: Org\n* Heading\n', 'c.markdown': '# Markdown\n', 'd.org': '* Org\n', 'e.txt': '* Ambiguous\n' });
   await f.library.open(f.root, { defaultExtension: 'txt', txtSyntax: 'markdown' });
-  let a = await searchOne(f.library, 'a');
+  const a = await f.library.activate((await searchOne(f.library, 'a')).id);
   assert.equal(a.format, 'markdown');
   await f.library.setPreferences({ txtSyntax: 'org' });
   assert.equal((await searchOne(f.library, 'a')).format, 'markdown');
+  await f.library.activate((await searchOne(f.library, 'b')).id);
   assert.equal((await searchOne(f.library, 'b')).format, 'org');
   assert.equal((await searchOne(f.library, 'e')).format, 'plain');
   assert.equal((await searchOne(f.library, 'c')).format, 'markdown');

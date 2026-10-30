@@ -1,5 +1,22 @@
 #+title: nvShift releases
 
+* v0.4.0: stable syntax and quick access
+Asset cleanup is available from Settings → Notes folder as well as the File menu.
+Automatic .txt syntax detection runs when opening a note and stays stable while
+editing, saving, undoing, or receiving external changes. Reopen a note to detect
+its latest contents, or choose its syntax beside the heading. The Automatic
+label stays steady during typing and draft writes.
+
+Quick access defaults to Ctrl+Alt+Space, or Control+Option+Space on macOS.
+Profiles using the old default migrate once; custom and disabled shortcuts are
+preserved. Settings records keyboard shortcuts and reports registration and the
+last activation received. Failed replacements preserve the previous binding.
+Wayland registrations remain awaiting verification until an activation arrives.
+
+Physical shortcut delivery with another application focused remains a native
+acceptance check on macOS, Windows, X11, and Wayland. Automated callback tests
+verify nvShift's window and focus behavior, not OS key delivery.
+
 * v0.2.0: automatic .txt syntax and heading folding
 Use existing Markdown, Org, and plain-text =.txt= notes together without
 renaming or converting them. nvShift detects syntax from each note's contents;

@@ -9,6 +9,7 @@ import { showMetadata } from './metadata.js';
 import { resolveAnchor } from './anchors.js';
 import { createSearch } from './search.js';
 import { createAssetCleanupUI } from './asset-cleanup-ui.js';
+import { createShortcutRecorder, formatShortcut as displayShortcut } from './shortcut-recorder.js';
 import './style.css';
 
 const api = window.nvShift;
@@ -19,12 +20,14 @@ document.documentElement.dataset.platform = api.platform;
 $('#app-version').textContent = `v${appVersion}`;
 $('#search-shortcut').textContent = mac ? '⌘ L' : 'Ctrl L';
 
-const defaultSettings = { mode: 'system', light: 'light', dark: 'dark', sansSerifHeadings: false, contentWidth: 'reading', filenameHeadings: false, vimMode: false, viewMode: 'editor', defaultExtension: 'md', txtSyntax: 'plain', globalShortcut: 'CommandOrControl+Shift+Space', sidebarWidth: 300, splitRatio: .5 };
+const defaultSettings = { mode: 'system', light: 'light', dark: 'dark', sansSerifHeadings: false, contentWidth: 'reading', filenameHeadings: false, vimMode: false, viewMode: 'editor', defaultExtension: 'md', txtSyntax: 'plain', globalShortcut: 'Control+Alt+Space', sidebarWidth: 300, splitRatio: .5 };
 let settings = { ...defaultSettings };
 let library = { root: null, count: 0, indexing: false, errors: [] };
 let current = null;
 let parsed = null;
 let shortcut = null;
+let shortcutCandidate = null;
+let shortcutSaving = false;
 let rows = [];
 let selected = -1;
 let querySequence = 0;
@@ -89,6 +92,36 @@ const assetCleanup = createAssetCleanupUI({
   },
 });
 
+const shortcutRecorder = createShortcutRecorder({
+  api, input: $('#global-shortcut'), recordButton: $('#record-shortcut'), platform: api.platform,
+  onChange: (accelerator) => { shortcutCandidate = accelerator; renderShortcutControls(); },
+  onRecordingChange: () => renderShortcutControls(), onError: reportError,
+});
+function formatShortcut(value) { return displayShortcut(value, api.platform); }
+function renderShortcutControls() {
+  const recording = shortcutRecorder.isRecording();
+  if (!recording) $('#global-shortcut').value = formatShortcut(shortcutCandidate ?? settings.globalShortcut) || 'Disabled';
+  $('#shortcut-saved').textContent = `Saved shortcut: ${formatShortcut(settings.globalShortcut) || 'Disabled'}`;
+  $('#record-shortcut').disabled = shortcutSaving;
+  $('#save-shortcut').disabled = recording || shortcutSaving || shortcutCandidate === null;
+  $('#disable-shortcut').disabled = recording || shortcutSaving || !settings.globalShortcut;
+  $('#reset-shortcut').disabled = recording || shortcutSaving;
+}
+async function applyShortcut(accelerator) {
+  if (shortcutSaving) return;
+  shortcutSaving = true;
+  renderShortcutControls();
+  try {
+    await shortcutRecorder.stop();
+    await updateSettings({ globalShortcut: accelerator });
+    shortcutCandidate = null;
+  } finally { shortcutSaving = false; renderShortcutControls(); }
+}
+async function openAssetCleanup() {
+  if ($('#settings-dialog').open) await closeSettings();
+  assetCleanup.open();
+}
+
 function applySettings(next) {
   const previousDefault = settings.defaultExtension;
   settings = { ...defaultSettings, ...next };
@@ -104,7 +137,7 @@ function applySettings(next) {
     const value = settings[control.dataset.setting];
     if (control.type === 'checkbox') control.checked = Boolean(value); else control.value = value;
   }
-  if (document.activeElement !== $('#global-shortcut')) $('#global-shortcut').value = settings.globalShortcut;
+  renderShortcutControls();
   if (previousDefault !== settings.defaultExtension || !$('#create-extension').value) $('#create-extension').value = settings.defaultExtension;
   $('#vim-status').hidden = !settings.vimMode;
   $('#editor-mode').textContent = settings.vimMode ? 'Vim editing' : 'Editing';
@@ -121,7 +154,7 @@ function applySettings(next) {
 function updateSettings(patch) {
   const version = ++settingsVersion;
   pendingSettings++;
-  applySettings({ ...settings, ...patch });
+  if (!Object.hasOwn(patch, 'globalShortcut')) applySettings({ ...settings, ...patch });
   const operation = settingsQueue.catch(() => {}).then(() => api.updateSettings(patch)).then((saved) => {
     if (version === settingsVersion && saved) applySettings(saved);
     return saved;
@@ -144,6 +177,8 @@ function acceptLibrary(next) {
   $('#create-extension').disabled = !library.root;
   $('#default-extension').disabled = !library.root;
   $('#txt-syntax').disabled = !library.root;
+  $('#settings-cleanup').disabled = !library.root;
+  $('#settings-cleanup-help').textContent = library.root ? 'Review unused images in this notes folder before moving selected files to Trash.' : 'Choose a notes folder first.';
   $('#welcome-choose').textContent = library.root ? 'Create your first note' : 'Choose notes folder';
   $('#library-empty').hidden = Boolean(library.root);
   if (library.errors?.length) {
@@ -155,13 +190,17 @@ function acceptLibrary(next) {
 function acceptShortcut(next) {
   if (!next) return;
   shortcut = next;
-  $('#shortcut-status').textContent = next.error ? 'Shortcut unavailable' : next.registered ? `${formatShortcut(next.accelerator)} to search` : 'Shortcut not assigned';
+  const label = formatShortcut(next.accelerator);
+  const status = next.status === 'awaiting-verification' ? 'Shortcut awaiting verification' : next.registered ? `${label} to search` : next.accelerator ? 'Shortcut unavailable' : 'Shortcut not assigned';
+  $('#shortcut-status').textContent = status;
   $('#shortcut-status').dataset.error = String(Boolean(next.error));
-  $('#shortcut-status').title = next.error || next.accelerator || '';
-  $('#shortcut-error').textContent = next.error || '';
-}
-function formatShortcut(value = '') {
-  return value.replace(/CommandOrControl|CmdOrCtrl/g, mac ? '⌘' : 'Ctrl').replace(/Command/g, '⌘').replace(/Control/g, 'Ctrl').replace(/Shift/g, mac ? '⇧' : 'Shift').replace(/Alt|Option/g, mac ? '⌥' : 'Alt').replace(/\+/g, mac ? '' : '+');
+  $('#shortcut-status').title = next.error || label || '';
+  $('#shortcut-registration').textContent = next.status === 'awaiting-verification'
+    ? 'Shortcut requested. Your desktop may require approval or a binding in its shortcut settings. Press it from another app to verify it.'
+    : next.registered ? `Registered: ${label}. Press it while another app has focus to verify quick access.`
+    : next.accelerator ? 'Shortcut unavailable. Record another shortcut or use the tray icon.' : 'Quick-access shortcut disabled.';
+  $('#shortcut-last-triggered').textContent = next.lastTriggeredAt ? `Last received: ${new Date(next.lastTriggeredAt).toLocaleString()}` : 'No shortcut activation received in this session.';
+  $('#shortcut-error').textContent = next.failedAttempt ? `${formatShortcut(next.failedAttempt.accelerator) || 'Disable'}: ${next.failedAttempt.error}` : next.error || '';
 }
 function acceptState(state) {
   if (!state) return;
@@ -353,16 +392,16 @@ function updateDocumentChrome() {
   const syntax = $('#syntax-select');
   syntax.hidden = !isText;
   syntax.disabled = syntaxWrites > 0;
-  syntax.value = current.syntaxMode === 'fixed' ? 'auto' : current.syntaxMode || 'auto';
-  const entry = drafts.get(current.id);
-  const pending = isText && entry && entry.version > entry.ackVersion;
-  syntax.querySelector('[value="auto"]').textContent = `Automatic · ${pending ? 'Detecting…' : formatName}`;
+  const syntaxMode = current.syntaxMode === 'fixed' ? 'auto' : current.syntaxMode || 'auto';
+  if (syntax.value !== syntaxMode) syntax.value = syntaxMode;
+  const automatic = syntax.querySelector('[value="auto"]');
+  const automaticLabel = `Automatic · ${formatName}`;
+  if (automatic.textContent !== automaticLabel) automatic.textContent = automaticLabel;
   syntax.title = current.syntaxWarning || (current.syntaxMode && current.syntaxMode !== 'auto'
     ? 'Syntax selected for this note. Choose Automatic to detect its contents.'
-    : pending ? 'Checking this note’s current contents.'
-      : current.syntaxDetection === 'conflicting' ? 'Both Markdown and Org markers were found. Choose a syntax if needed.'
-        : current.syntaxDetection === 'ambiguous' ? 'No clear format markers. Using this note’s creation syntax, or plain text for an existing note.'
-        : 'Detected from this note’s contents. Choose a syntax if needed; your file contents stay the same.');
+    : current.syntaxDetection === 'conflicting' ? 'Both Markdown and Org markers were found. Choose a syntax if needed.'
+      : current.syntaxDetection === 'ambiguous' ? 'No clear format markers. Using this note’s creation syntax, or plain text for an existing note.'
+      : 'Automatically detected syntax. Reopen this note to detect changes, or choose a syntax.');
   $('#conflict-banner').hidden = current.status !== 'conflict';
   const names = { saved: 'Saved', saving: 'Saving…', dirty: 'Unsaved changes', conflict: 'External change · edits preserved', error: 'Save failed · edits preserved' };
   $('#save-status').textContent = names[current.status] || current.status || 'Ready';
@@ -711,6 +750,7 @@ function openSettings(focus = '#appearance-mode') {
   requestAnimationFrame(() => $(focus)?.focus());
 }
 async function closeSettings() {
+  await shortcutRecorder.cancel();
   let pending;
   do { pending = settingsQueue; await pending.catch(() => {}); } while (pending !== settingsQueue);
   const bookmark = settingsBookmark; settingsBookmark = null;
@@ -754,15 +794,18 @@ for (const control of [$('#appearance-button'), $('#settings-button')]) control.
 });
 $('#settings-dialog').addEventListener('close', () => {
   if ($('#settings-dialog').open) return;
+  run(shortcutRecorder.cancel());
   const bookmark = settingsBookmark; settingsBookmark = null;
   editor.restoreSelection(bookmark);
 });
-$('#settings-dialog').addEventListener('cancel', (event) => { event.preventDefault(); void closeSettings(); });
-$('#close-settings').addEventListener('click', closeSettings);
-$('#settings-done').addEventListener('click', closeSettings);
+$('#settings-dialog').addEventListener('cancel', (event) => { event.preventDefault(); run(closeSettings()); });
+$('#close-settings').addEventListener('click', () => run(closeSettings()));
+$('#settings-done').addEventListener('click', () => run(closeSettings()));
 for (const control of $$('[data-setting]')) control.addEventListener('change', () => run(updateSettings({ [control.dataset.setting]: control.type === 'checkbox' ? control.checked : control.value })));
-$('#save-shortcut').addEventListener('click', () => run(updateSettings({ globalShortcut: $('#global-shortcut').value.trim() })));
-$('#global-shortcut').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); $('#save-shortcut').click(); } });
+$('#save-shortcut').addEventListener('click', () => { if (shortcutCandidate !== null) run(applyShortcut(shortcutCandidate)); });
+$('#disable-shortcut').addEventListener('click', () => run(applyShortcut('')));
+$('#reset-shortcut').addEventListener('click', () => { shortcutCandidate = defaultSettings.globalShortcut; renderShortcutControls(); });
+$('#settings-cleanup').addEventListener('click', () => run(openAssetCleanup()));
 $('#toggle-content-width').addEventListener('click', () => run(updateSettings({ contentWidth: settings.contentWidth === 'full' ? 'reading' : 'full' })));
 $('#toggle-outline').addEventListener('click', () => { const hidden = !$('#outline').hidden; $('#outline').hidden = hidden; $('#toggle-outline').setAttribute('aria-expanded', String(!hidden)); });
 $('#reveal-note').addEventListener('click', () => current && run(api.reveal(current.id)));
@@ -817,10 +860,14 @@ $('#preview-find-close').addEventListener('click', closePreviewFind);
 
 function commandAction(event) {
   const command = typeof event === 'string' ? event : event?.command;
-  if (command === 'focus-search') focusSearch();
+  if (shortcutRecorder.isRecording() && !['flush', 'error'].includes(command)) return;
+  if (command === 'focus-search') run((async () => {
+    if ($('#settings-dialog').open) await closeSettings();
+    focusSearch();
+  })());
   else if (command === 'settings') openSettings('#vim-mode');
   else if (command === 'choose-library') run(chooseLibrary());
-  else if (command === 'asset-cleanup') assetCleanup.open();
+  else if (command === 'asset-cleanup') run(openAssetCleanup());
   else if (command === 'find') showFind();
   else if (command === 'save') run(saveCurrent());
   else if (command === 'toggle-heading' && current && settings.viewMode !== 'preview') { if (editor.toggleHeading()) editor.focus(); }
@@ -888,4 +935,4 @@ setupResizer('#split-resizer', () => settings.splitRatio, (original, delta) => {
 }, (splitRatio) => updateSettings({ splitRatio }), () => window.innerWidth <= 1050);
 
 applySettings(settings);
-run(api.initial().then((state) => { acceptState(state); if (library.root) focusSearch(); }));
+run(api.initial().then(async (state) => { acceptState(state); if (library.root) focusSearch(); await api.rendererReady(); }));

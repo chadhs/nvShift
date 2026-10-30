@@ -117,10 +117,13 @@ extension when creating a note.
 |-----------+----------------|
 | .md, .markdown | Markdown |
 | .org | Org |
-| .txt | Detected from contents, with an optional per-note override |
+| .txt | Detected on opening, with an optional per-note override |
 
 Existing =.txt= files can mix Markdown, Org, and plain text in one folder.
-Automatic detection recognizes Markdown headings, fenced blocks, links, and
+Automatic detection runs once when you open a note. Its format stays fixed while
+you type, save, undo, or receive external file changes. Switch to another note
+and back to detect its latest contents. Choosing Automatic after a manual
+override also detects once immediately. Detection recognizes Markdown headings, fenced blocks, links, and
 images, and Org directives, blocks, links, and multi-level headings. Literal
 code examples are ignored. Prose, ordinary lists, and a lone =* Heading= are
 ambiguous; existing ambiguous files and files with conflicting evidence display
@@ -129,8 +132,8 @@ as plain text. The syntax control beside the view controls offers =Automatic=,
 
 The folder's =New .txt note syntax= setting defaults to plain text and affects
 only newly created =.txt= notes. A new note starts empty and remembers that
-choice as its fallback until its contents identify a format; clear conflicting
-evidence still falls back to plain text. Changing the preference affects future
+choice while you edit. Reopening detects its contents, using that choice for
+ambiguous content; conflicting evidence falls back to plain text. Changing the preference affects future
 notes only, so an existing collection needs no migration. Your previous =.txt=
 setting becomes the creation default when upgrading.
 
@@ -212,7 +215,8 @@ different Windows drives use local file URLs.
 
 Markdown syntax inserts an image link, Org inserts an Org file link, and plain
 text inserts the path as text. Deleting a note or removing a link does not delete
-its image assets. Use File → Find unused assets to review regular images directly
+its image assets. Use Settings → Notes folder → Find unused assets, or File → Find unused assets,
+to review regular images directly
 in the selected library's =assets/= folder and move explicitly selected images
 to the OS Trash. Nothing is preselected; Select all unused excludes the separate
 group referenced only by older recovery backups. An older note version may need
@@ -261,9 +265,20 @@ width affect the preview. Changing appearance preserves editor state. Zoom is
 available through the View menu.
 
 * Quick access and closing
-The default global shortcut is =Cmd/Ctrl+Shift+Space=. Change it in Settings if
-another application uses it. A registration failure is shown in the app; opening
-nvShift again also raises its existing window.
+The default global shortcut is =Ctrl+Alt+Space=, shown as
+=Control+Option+Space= on macOS. Existing profiles using the previous default
+move to this shortcut once; custom shortcuts and disabled shortcuts stay as set.
+
+In Settings → Quick access, click Record and press a shortcut, then Apply.
+Escape cancels recording. Disable removes the binding. Reset to default prepares
+the default shortcut for Apply. Recording temporarily suspends global shortcuts
+and app commands, and closing Settings or switching apps ends recording.
+
+Settings shows the saved binding, registration result, and the last shortcut
+activation received in this session. A failed replacement keeps the previous
+binding and preference. Verify a shortcut by pressing it while another app has
+focus: nvShift should appear with search focused. Opening nvShift again also
+raises its existing window.
 
 Closing the window keeps nvShift running. The menu-bar or tray icon provides
 Open, Settings, and Quit. Quit saves pending changes before exiting. Automatic
@@ -273,7 +288,8 @@ On Linux Wayland, global shortcuts depend on the desktop's GlobalShortcuts
 portal. The installed launcher uses =com.chadhs.nvshift.desktop= to match the
 application's portal identity. The desktop may ask for shortcut permission or
 provide its own shortcut settings. Use tray access or relaunch the app when a
-shortcut is unavailable. Xvfb CI checks do not substitute for a real Wayland
+shortcut is unavailable. On Wayland, a submitted registration remains awaiting
+verification until nvShift receives its first activation. Xvfb CI checks do not substitute for a real Wayland
 session check.
 
 * Saving, external editors, and recovery

@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createLibrary, atomicReplace } from '../electron/library.cjs';
 import { createSyntaxDetector } from '../electron/syntax-client.cjs';
+import { detectSyntax } from '../electron/syntax-detection.cjs';
 import { createSettings } from '../electron/settings.cjs';
 import { createResources } from '../electron/resources.cjs';
 import { renderDocument } from '../src/documents.js';
@@ -35,7 +36,7 @@ test('mixed txt detection is independent of legacy folder preferences and does n
   const f = await fixture(t, files);
   await f.library.open(f.root, { txtSyntax: 'org' });
   for (const [name, format] of [['markdown.txt', 'markdown'], ['org.txt', 'org'], ['ambiguous.txt', 'plain'], ['conflict.txt', 'plain'], ['fixed.md', 'markdown'], ['fixed.org', 'org']]) {
-    const note = at(f, name);
+    const note = await f.library.activate(at(f, name).id);
     assert.equal(note.format, format);
     assert.equal(note.syntaxMode, name.endsWith('.txt') ? 'auto' : 'fixed');
     assert.equal(await fs.readFile(note.path, 'utf8'), files[name]);
@@ -57,10 +58,18 @@ test('creation hints persist locally across preferences, clear evidence, rename,
   assert.equal(f.library.get(id).format, 'org');
   assert.equal((await f.library.create('Future')).format, 'markdown');
   note = await f.library.updateBuffer(id, '# Markdown wins\n', 1, note.revision);
+  assert.equal(note.format, 'org');
+  note = await f.library.activate(id);
   assert.equal(note.format, 'markdown');
   note = await f.library.updateBuffer(id, 'Ordinary prose', 2, note.revision);
+  assert.equal(note.format, 'markdown');
+  await f.library.create('Away', 'md');
+  note = await f.library.activate(id);
   assert.equal(note.format, 'org');
   note = await f.library.updateBuffer(id, '# Markdown\n#+TITLE: Conflict', 3, note.revision);
+  assert.equal(note.format, 'org');
+  await f.library.activate(at(f, 'Future.txt').id);
+  note = await f.library.activate(id);
   assert.equal(note.format, 'plain'); assert.equal(note.syntaxDetection, 'conflicting');
   note = await f.library.updateBuffer(id, 'Ordinary prose', 4, note.revision);
   note = await f.library.rename(id, 'Renamed 世界');
@@ -68,7 +77,7 @@ test('creation hints persist locally across preferences, clear evidence, rename,
   const restored = at(f, 'Renamed 世界.txt');
   assert.equal(restored.id, id); assert.equal(restored.format, 'org'); assert.equal(restored.syntaxMode, 'auto');
   assert.equal(await fs.readFile(restored.path, 'utf8'), 'Ordinary prose');
-  assert.deepEqual((await fs.readdir(f.root)).sort(), ['Future.txt', 'Renamed 世界.txt']);
+  assert.deepEqual((await fs.readdir(f.root)).sort(), ['Away.md', 'Future.txt', 'Renamed 世界.txt']);
   assert.equal(at(f, 'Future.txt').format, 'markdown');
 });
 
@@ -96,53 +105,151 @@ test('manual modes persist through case-only rename and restart; automatic resum
 });
 
 test('external edits, unsaved edits, and stale client versions keep source, format, and resources aligned', async (t) => {
-  const f = await fixture(t, { 'Note.txt': '# Markdown' });
+  const f = await fixture(t, { 'Other.md': 'Other', 'Note.txt': '# Markdown' });
   await f.library.open(f.root);
   let note = at(f, 'Note.txt');
   await fs.writeFile(note.path, '#+TITLE: 外から\n[[file:chart.png]]');
   await fs.writeFile(path.join(f.root, 'chart.png'), png);
-  await waitFor(() => f.library.get(note.id).format === 'org');
-  note = f.library.get(note.id);
+  await waitFor(() => f.library.get(note.id).source.startsWith('#+TITLE: 外から'));
+  assert.equal(f.library.get(note.id).format, 'markdown');
+  await f.library.activate(at(f, 'Other.md').id);
+  note = await f.library.activate(note.id);
   assert.equal(renderDocument(note).title, '外から');
   const resources = createResources(f.library, { render: async () => { throw new Error('Unexpected diagram'); }, cancel() {} });
   t.after(() => resources.dispose());
   await f.library.activate(note.id);
   const oldRevision = note.revision;
-  const updated = await f.library.updateBuffer(note.id, '# Unsaved Markdown\n![Image](chart.png)', 1, note.revision);
-  assert.equal(updated.format, 'markdown'); assert.equal(renderDocument(updated).title, 'Unsaved Markdown');
+  const updated = await f.library.updateBuffer(note.id, '#+TITLE: Unsaved Org\n[[file:chart.png]]', 1, note.revision);
+  assert.equal(updated.format, 'org'); assert.equal(renderDocument(updated).title, 'Unsaved Org');
   assert.equal(await fs.readFile(note.path, 'utf8'), '#+TITLE: 外から\n[[file:chart.png]]');
   const preview = renderDocument(updated);
   assert.equal(preview.images.length, 1);
   assert.match((await resources.image(updated.id, updated.revision, preview.images[0])).dataUrl, /^data:image\/png/);
   assert.match((await resources.image(note.id, oldRevision, preview.images[0])).error, /changed/);
   const stale = await f.library.updateBuffer(note.id, '#+TITLE: Stale', 0, oldRevision);
-  assert.equal(stale.format, 'markdown'); assert.equal(stale.source, updated.source);
+  assert.equal(stale.format, 'org'); assert.equal(stale.source, updated.source);
+  const markdown = await f.library.updateBuffer(note.id, '# Markdown again\n![Image](chart.png)', 2, updated.revision);
+  assert.equal(markdown.format, 'org');
+  const imageReference = renderDocument({ ...markdown, format: 'markdown' }).images[0];
+  // Prime the resource cache at the edited revision before reopening changes syntax.
+  assert.ok((await resources.image(markdown.id, markdown.revision, imageReference)).error);
+  await f.library.activate(at(f, 'Other.md').id);
+  const reopened = await f.library.activate(note.id);
+  assert.equal(reopened.format, 'markdown'); assert.ok(reopened.revision > markdown.revision);
+  assert.match((await resources.image(reopened.id, reopened.revision, imageReference)).dataUrl, /^data:image\/png/);
+  assert.match((await resources.image(markdown.id, markdown.revision, imageReference)).error, /changed/);
 });
 
-test('serial async detection and writable snapshots use the latest queued buffer for image insertion', async (t) => {
+test('opening detection and queued edits preserve snapshots and the selected image syntax', async (t) => {
   const detector = createSyntaxDetector();
   let release, started;
   const began = new Promise((resolve) => { started = resolve; });
   const gate = new Promise((resolve) => { release = resolve; });
-  const f = await fixture(t, { 'Note.txt': 'Plain' }, { syntaxDetector: {
+  const f = await fixture(t, { 'Other.md': 'Other', 'Note.txt': 'Plain' }, { syntaxDetector: {
     async detect(source) { if (source === '# Slow Markdown') { started(); await gate; } return detector.detect(source); },
     close: () => detector.close(),
   } });
   await f.library.open(f.root);
-  const note = at(f, 'Note.txt');
-  const first = f.library.updateBuffer(note.id, '# Slow Markdown', 1, note.revision);
+  let note = await f.library.activate(at(f, 'Note.txt').id);
+  note = await f.library.updateBuffer(note.id, '# Slow Markdown', 1, note.revision);
+  assert.equal(note.format, 'plain');
+  await f.library.activate(at(f, 'Other.md').id);
+  const opening = f.library.activate(note.id);
   await began;
   const pending = f.library.get(note.id);
-  assert.equal(pending.source, 'Plain'); assert.equal(pending.revision, note.revision); assert.equal(pending.format, 'plain');
+  assert.equal(pending.source, '# Slow Markdown'); assert.equal(pending.format, 'plain');
   const second = f.library.updateBuffer(note.id, '#+TITLE: Newest Org', 2, note.revision);
   const writable = f.library.assertWritable(note.id);
   release();
-  assert.equal((await first).format, 'markdown');
+  assert.equal((await opening).format, 'markdown');
   const latest = await second;
-  assert.equal(latest.format, 'org');
+  assert.equal(latest.format, 'markdown');
   const image = await insertImageBytes(f.root, await writable, png, 'Diagram.png');
-  assert.match(image.text, /^\[\[file:/);
+  assert.match(image.text, /^!\[/);
   assert.equal(f.library.get(note.id).source, '#+TITLE: Newest Org');
+  await f.library.activate(at(f, 'Other.md').id);
+  assert.equal((await f.library.activate(note.id)).format, 'org');
+});
+
+test('automatic detection runs only on entry and explicit mode changes, with search and autosave independent', async (t) => {
+  const calls = [];
+  const f = await fixture(t, { 'Other.md': 'Other', 'Unopened.txt': '# Background', 'Note.txt': '# Markdown' }, { syntaxDetector: {
+    async detect(source) { calls.push(source); return detectSyntax(source); }, close: async () => {},
+  } });
+  await fs.utimes(path.join(f.root, 'Note.txt'), new Date(Date.now() + 1000), new Date(Date.now() + 1000));
+  await f.library.open(f.root);
+  let note = f.library.active();
+  assert.equal(note.name, 'Note.txt'); assert.equal(note.format, 'markdown');
+  assert.deepEqual(calls, ['# Markdown']);
+  assert.equal((await f.library.search('Background')).results.length, 1);
+  await f.library.activate(note.id);
+  note = await f.library.updateBuffer(note.id, '#+TITLE: Edited Org', 1, note.revision);
+  assert.equal(note.format, 'markdown');
+  assert.equal((await f.library.search('Edited')).results.length, 1);
+  await f.library.assertWritable(note.id);
+  await insertImageBytes(f.root, await f.library.assertWritable(note.id), png, 'Diagram.png');
+  await waitFor(() => f.library.get(note.id).status === 'saved');
+  await fs.writeFile(note.path, '#+TITLE: External Org');
+  await waitFor(() => f.library.get(note.id).source === '#+TITLE: External Org');
+  assert.equal(f.library.get(note.id).format, 'markdown');
+  assert.equal(calls.length, 1);
+  await f.library.activate(at(f, 'Other.md').id);
+  note = await f.library.activate(note.id);
+  assert.equal(note.format, 'org'); assert.equal(calls.length, 2);
+  note = await f.library.setSyntax(note.id, 'markdown');
+  assert.equal(note.format, 'markdown'); assert.equal(calls.length, 2);
+  note = await f.library.setSyntax(note.id, 'auto');
+  assert.equal(note.format, 'org'); assert.equal(calls.length, 3);
+  await f.library.setSyntax(note.id, 'auto');
+  assert.equal(calls.length, 3);
+  // Even concurrent navigation must finish in request order.
+  await Promise.all([f.library.activate(at(f, 'Other.md').id), f.library.activate(note.id), f.library.activate(at(f, 'Unopened.txt').id)]);
+  assert.equal(f.library.active().name, 'Unopened.txt'); assert.equal(calls.length, 5);
+});
+
+test('new notes keep their creation syntax without detection until they are reopened', async (t) => {
+  const calls = [];
+  const f = await fixture(t, {}, { syntaxDetector: {
+    async detect(source) { calls.push(source); return detectSyntax(source); }, close: async () => {},
+  } });
+  await f.library.open(f.root, { defaultExtension: 'txt', txtSyntax: 'org' });
+  let note = await f.library.create('New');
+  note = await f.library.updateBuffer(note.id, '# Markdown', 1, note.revision);
+  await f.library.save(note.id);
+  await f.library.activate(note.id);
+  assert.equal(note.format, 'org'); assert.equal(calls.length, 0);
+  await f.library.create('Other', 'md');
+  note = await f.library.activate(note.id);
+  assert.equal(note.format, 'markdown'); assert.deepEqual(calls, ['# Markdown']);
+});
+
+test('linked notes detect on opening and library switching without reclassifying live external updates', async (t) => {
+  const calls = [];
+  const f = await fixture(t, { 'Local.md': 'Local' }, { syntaxDetector: {
+    async detect(source) { calls.push(source); return detectSyntax(source); }, close: async () => {},
+  } });
+  const external = path.join(f.directory, 'linked-notes');
+  await fs.mkdir(external);
+  const file = path.join(external, 'Linked.txt');
+  await fs.writeFile(file, '# Linked Markdown');
+  await fs.utimes(file, new Date(Date.now() + 1000), new Date(Date.now() + 1000));
+  await fs.symlink(external, path.join(f.root, 'Linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  await f.library.open(f.root);
+  let note = f.library.active();
+  assert.equal(note.path, file); assert.equal(note.format, 'markdown'); assert.equal(calls.length, 1);
+  await fs.writeFile(file, '#+TITLE: Linked Org');
+  await waitFor(() => f.library.get(note.id).source === '#+TITLE: Linked Org');
+  assert.equal(f.library.get(note.id).format, 'markdown'); assert.equal(calls.length, 1);
+  await f.library.activate(at(f, 'Local.md').id);
+  note = await f.library.activate(note.id);
+  assert.equal(note.format, 'org'); assert.equal(calls.length, 2);
+  const secondRoot = path.join(f.directory, 'second-library');
+  await fs.mkdir(secondRoot);
+  await fs.writeFile(path.join(secondRoot, 'Other.txt'), '# Other Markdown');
+  await f.library.open(secondRoot);
+  assert.equal(f.library.active().format, 'markdown'); assert.equal(calls.length, 3);
+  await f.library.open(f.root);
+  assert.equal(f.library.active().format, 'org'); assert.equal(calls.length, 4);
 });
 
 test('crash recovery retains txt overrides, creation hints, and divergent disk content', async (t) => {
@@ -188,6 +295,9 @@ test('detection failure keeps drafts journaled, visibly falls back, and still au
   await f.library.open(f.root);
   let note = at(f, 'Note.txt');
   note = await f.library.updateBuffer(note.id, '# Failure draft', 1, note.revision);
+  assert.equal(warnings.length, 0);
+  await f.library.setSyntax(note.id, 'plain');
+  note = await f.library.setSyntax(note.id, 'auto');
   assert.equal(note.format, 'plain'); assert.equal(note.syntaxDetection, 'unavailable');
   assert.equal(note.status, 'dirty'); assert.match(note.syntaxWarning, /Injected worker failure/);
   const [recoveryDirectory] = await fs.readdir(path.join(f.userData, 'recovery'));
@@ -197,6 +307,9 @@ test('detection failure keeps drafts journaled, visibly falls back, and still au
   await waitFor(() => f.library.get(note.id).status === 'saved');
   assert.ok(warnings.some((message) => message.includes('Format detection failed')));
   note = await f.library.updateBuffer(note.id, '# Recovered detector', 2, note.revision);
+  assert.equal(note.format, 'plain');
+  await f.library.setSyntax(note.id, 'plain');
+  note = await f.library.setSyntax(note.id, 'auto');
   assert.equal(note.format, 'markdown'); assert.equal(note.syntaxWarning, '');
 });
 
@@ -209,6 +322,8 @@ test('a crash during detection recovers the already-journaled source', async (t)
     } });
     await library.open(process.argv[1]); const note = library.active();
     await library.updateBuffer(note.id, '# In-flight draft', 1, note.revision);
+    await library.setSyntax(note.id, 'plain');
+    await library.setSyntax(note.id, 'auto');
     throw new Error('Expected process to stop during detection');
   })().catch(error => { console.error(error); process.exit(1); });`;
   await exec(process.execPath, ['-e', script, f.root, f.userData, path.resolve('electron/library.cjs'), path.resolve('electron/syntax-client.cjs')]);

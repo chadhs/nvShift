@@ -4,7 +4,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
-const { createSettings } = require('./settings.cjs');
+const { createSettings, validate } = require('./settings.cjs');
+const { createShortcutController } = require('./shortcuts.cjs');
 const { createLibrary } = require('./library.cjs');
 const { createDiagramRenderer } = require('./diagrams.cjs');
 const { createResources } = require('./resources.cjs');
@@ -30,7 +31,8 @@ const page = path.join(__dirname, '../dist/index.html');
 const pageURL = pathToFileURL(page).href;
 let win, tray, settings, library, resources, diagramRenderer, cleanup;
 let quitting = false, quitReady = false, uiReady = false, hiding = false;
-let shortcut = { accelerator: '', registered: false, error: '' };
+let shortcuts;
+let pendingFocusSearch = false;
 const flushRequests = new Map(), authorizedDrops = new Map();
 const locked = app.requestSingleInstanceLock();
 
@@ -44,15 +46,17 @@ function report(error) {
   console.error(message);
 }
 function state() {
-  return { settings: settings.snapshot(library.snapshot().root), library: library.snapshot(), document: library.active(), shortcut };
+  return { settings: settings.snapshot(library.snapshot().root), library: library.snapshot(), document: library.active(), shortcut: shortcuts?.snapshot() };
 }
 function broadcast() { if (uiReady) win?.webContents.send('app:state', state()); }
 function showWindow(focusSearch = true) {
   if (!settings || !library) return;
   if (!win || win.isDestroyed()) createWindow();
   win.restore(); win.show(); win.focus();
-  if (uiReady && focusSearch) command('focus-search');
-  else if (focusSearch) win.webContents.once('did-finish-load', () => command('focus-search'));
+  if (focusSearch) {
+    if (uiReady) command('focus-search');
+    else pendingFocusSearch = true;
+  }
 }
 async function flushRenderer() {
   if (!win || win.isDestroyed() || !uiReady) return;
@@ -83,23 +87,16 @@ async function quit() {
     await cleanup?.dispose?.();
     await library.dispose();
     resources.dispose();
-    globalShortcut.unregisterAll();
+    await shortcuts?.dispose();
     tray?.destroy();
     quitReady = true;
     app.quit();
   } catch (error) { quitting = false; report(error); showWindow(false); }
 }
-function registerShortcut() {
-  globalShortcut.unregisterAll();
-  const accelerator = settings.snapshot().globalShortcut;
-  shortcut = { accelerator, registered: false, error: '' };
-  if (accelerator) {
-    try {
-      shortcut.registered = globalShortcut.register(accelerator, () => showWindow());
-      if (!shortcut.registered) shortcut.error = 'The quick-access shortcut could not be registered. Choose another shortcut in Settings or use the tray/menu-bar icon.';
-    } catch { shortcut.error = 'That shortcut is not valid. Choose another shortcut in Settings.'; }
-  }
-  broadcast();
+function endShortcutRecording() {
+  if (quitting) return Promise.resolve();
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(false);
+  return shortcuts?.endRecording();
 }
 function setTrayImage() {
   if (!tray) return;
@@ -133,11 +130,14 @@ function createWindow() {
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.on('render-process-gone', () => {
     uiReady = false;
+    void endShortcutRecording();
     resources?.dispose();
     resources = createResources(library, diagramRenderer);
     // Main-owned buffers survive a renderer crash; rebuilding the view restores them.
     if (!quitting && win && !win.isDestroyed()) win.webContents.reload();
   });
+  win.on('blur', () => { void endShortcutRecording(); });
+  win.webContents.on('destroyed', () => { void endShortcutRecording(); });
   win.on('close', (event) => { if (!quitReady) { event.preventDefault(); void hideWindow(); } });
   win.on('closed', () => { win = null; uiReady = false; });
   win.once('ready-to-show', () => { win.show(); win.focus(); });
@@ -165,7 +165,16 @@ function installHandlers() {
       for (const [key, deadline] of authorizedDrops) if (deadline < Date.now()) authorizedDrops.delete(key);
     }
   });
-  handle('app:initial', () => { uiReady = true; return state(); });
+  handle('app:initial', () => state());
+  handle('app:ready', () => {
+    uiReady = true;
+    if (pendingFocusSearch) { pendingFocusSearch = false; command('focus-search'); }
+  });
+  handle('shortcut:record-start', async () => {
+    win.webContents.setIgnoreMenuShortcuts(true);
+    await shortcuts.beginRecording();
+  });
+  handle('shortcut:record-end', endShortcutRecording);
   handle('library:choose', async () => {
     const choice = await dialog.showOpenDialog(win, { title: 'Choose your notes folder', properties: ['openDirectory', 'createDirectory'] });
     return choice.canceled ? null : openLibrary(choice.filePaths[0]);
@@ -181,9 +190,13 @@ function installHandlers() {
   handle('note:conflict', (id, action) => library.resolveConflict(id, action));
   handle('note:reveal', (id) => { const note = library.get(id); if (!note) throw new Error('Choose a note first.'); shell.showItemInFolder(note.path); });
   handle('settings:update', async (patch) => {
-    const updated = await settings.update(patch, library.snapshot().root);
+    const valid = validate(patch);
+    let updated;
+    if (Object.hasOwn(valid, 'globalShortcut')) {
+      if (Object.keys(valid).length !== 1) throw new Error('Change the global shortcut separately from other settings.');
+      updated = await shortcuts.update(valid.globalShortcut);
+    } else updated = await settings.update(valid, library.snapshot().root);
     if (Object.hasOwn(patch, 'defaultExtension') || Object.hasOwn(patch, 'txtSyntax')) await library.setPreferences(updated);
-    if (Object.hasOwn(patch, 'globalShortcut')) registerShortcut();
     broadcast();
     return updated;
   });
@@ -237,7 +250,7 @@ function installHandlers() {
   });
 }
 function installMenu() {
-  const fire = (name) => () => command(name);
+  const fire = (name) => () => { if (!shortcuts?.snapshot().recording) command(name); };
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(process.platform === 'darwin' ? [{ label: 'nvShift', submenu: [{ role: 'about' }, { label: 'Settings…', accelerator: 'Cmd+,', click: fire('settings') }, { type: 'separator' }, { role: 'services' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { label: 'Quit nvShift', accelerator: 'Cmd+Q', click: () => void quit() }] }] : []),
     { label: 'File', submenu: [
@@ -291,6 +304,16 @@ else {
         await settings.setRoot(canonical);
       } catch (error) { report(error); }
     }
-    installHandlers(); installMenu(); createTray(); registerShortcut(); createWindow();
+    shortcuts = createShortcutController({
+      globalShortcut, settings,
+      wayland: process.platform === 'linux' && (process.env.XDG_SESSION_TYPE === 'wayland' || Boolean(process.env.WAYLAND_DISPLAY)),
+      onActivate: () => showWindow(),
+      onChange: (value) => {
+        if (win && !win.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(value.recording);
+        broadcast();
+      },
+    });
+    installHandlers(); installMenu(); createTray();
+    await shortcuts.initialize(); createWindow();
   }).catch((error) => { console.error(error); dialog.showErrorBox('nvShift could not start', error.message); quitReady = true; app.quit(); });
 }

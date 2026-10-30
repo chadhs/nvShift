@@ -7,7 +7,7 @@ const DEFAULTS = Object.freeze({
   mode: 'system', light: 'light', dark: 'dark', sansSerifHeadings: false,
   contentWidth: 'reading', filenameHeadings: false, vimMode: false, viewMode: 'editor',
   defaultExtension: 'md', txtSyntax: 'plain',
-  globalShortcut: 'CommandOrControl+Shift+Space', sidebarWidth: 300, splitRatio: 0.5,
+  globalShortcut: 'Control+Alt+Space', sidebarWidth: 300, splitRatio: 0.5,
 });
 const LIBRARY_KEYS = new Set(['defaultExtension', 'txtSyntax']);
 const choices = {
@@ -44,10 +44,15 @@ function recoverSettings(value) {
 async function createSettings(userData) {
   const file = path.join(userData, 'settings.json');
   await fs.mkdir(userData, { recursive: true });
-  let profile = { version: 1, globals: {}, libraries: {}, lastLibrary: null };
+  let profile = { version: 2, globals: {}, libraries: {}, lastLibrary: null };
+  let migrated = false;
   try {
     const saved = JSON.parse(await fs.readFile(file, 'utf8'));
     profile.globals = Object.fromEntries(Object.entries(recoverSettings(saved.globals)).filter(([key]) => !LIBRARY_KEYS.has(key)));
+    if (!(saved.version >= 2)) {
+      if (profile.globals.globalShortcut === 'CommandOrControl+Shift+Space') profile.globals.globalShortcut = DEFAULTS.globalShortcut;
+      migrated = true;
+    }
     if (typeof saved.lastLibrary === 'string') profile.lastLibrary = saved.lastLibrary;
     if (saved.libraries && typeof saved.libraries === 'object') {
       for (const [root, entry] of Object.entries(saved.libraries)) profile.libraries[root] = Object.fromEntries(Object.entries(recoverSettings(entry)).filter(([key]) => LIBRARY_KEYS.has(key)));
@@ -59,33 +64,41 @@ async function createSettings(userData) {
   function snapshot(root = profile.lastLibrary) {
     return { ...DEFAULTS, ...profile.globals, ...(root ? profile.libraries[root] : {}) };
   }
-  function persist() {
-    const contents = JSON.stringify(profile, null, 2) + '\n';
+  async function persist(next) {
+    const contents = JSON.stringify(next, null, 2) + '\n';
+    const temp = `${file}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temp, contents, { mode: 0o600, flag: 'wx' });
+      await fs.rename(temp, file);
+    } finally { await fs.rm(temp, { force: true }).catch(() => {}); }
+  }
+  // Commit in memory only after the replacement file is safely in place.
+  function change(mutator, root) {
     const write = async () => {
-      const temp = `${file}.${randomUUID()}.tmp`;
-      try {
-        await fs.writeFile(temp, contents, { mode: 0o600, flag: 'wx' });
-        await fs.rename(temp, file);
-      } finally { await fs.rm(temp, { force: true }).catch(() => {}); }
+      const next = structuredClone(profile);
+      mutator(next);
+      await persist(next);
+      profile = next;
+      return snapshot(root);
     };
     writes = writes.catch(() => {}).then(write);
     return writes;
   }
+  if (migrated) await persist(profile);
+
   return {
     snapshot,
     lastLibrary: () => profile.lastLibrary,
-    async setRoot(root) { profile.lastLibrary = root; await persist(); return snapshot(root); },
+    setRoot(root) { return change((next) => { next.lastLibrary = root; }, root); },
     async update(patch, root = profile.lastLibrary) {
       const valid = validate(patch);
       if (!root && Object.keys(valid).some((key) => LIBRARY_KEYS.has(key))) throw new Error('Choose a notes folder before changing its file settings.');
-      for (const [key, value] of Object.entries(valid)) {
-        if (LIBRARY_KEYS.has(key)) {
-          if (!root) throw new Error('Choose a notes folder before changing its file settings.');
-          (profile.libraries[root] ??= {})[key] = value;
-        } else profile.globals[key] = value;
-      }
-      await persist();
-      return snapshot(root);
+      return change((next) => {
+        for (const [key, value] of Object.entries(valid)) {
+          if (LIBRARY_KEYS.has(key)) (next.libraries[root] ??= {})[key] = value;
+          else next.globals[key] = value;
+        }
+      }, root);
     },
     flush: () => writes,
   };

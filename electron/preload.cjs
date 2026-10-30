@@ -8,6 +8,8 @@ const subscribe = (channel) => (callback) => {
 };
 contextBridge.exposeInMainWorld('nvShift', {
   platform: process.platform,
+  rendererReady: invoke('app:ready'),
+  beginShortcutRecording: invoke('shortcut:record-start'), endShortcutRecording: invoke('shortcut:record-end'),
   initial: invoke('app:initial'), chooseLibrary: invoke('library:choose'), search: invoke('library:search'),
   create: invoke('note:create'), open: invoke('note:open'), updateBuffer: invoke('note:update'),
   save: invoke('note:save'), rename: invoke('note:rename'), trash: invoke('note:trash'),

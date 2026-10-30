@@ -385,8 +385,13 @@ async function checkHeadingFolding() {
 async function waitSaved() { await expect(window.locator('#save-status')).toHaveText('Saved', { timeout: 15000 }); }
 const cleanupItem = (name) => window.locator(`#cleanup-dialog .cleanup-item[data-name=${JSON.stringify(name)}]`);
 const fileExists = (file) => stat(file).then(() => true, (error) => { if (error.code === 'ENOENT') return false; throw error; });
-async function openCleanup({ wait = true } = {}) {
-  await app.evaluate(({ Menu }) => {
+async function openCleanup({ wait = true, settings = false } = {}) {
+  if (settings) {
+    await window.locator('#settings-button').click();
+    await expect(window.locator('#settings-cleanup')).toBeEnabled();
+    await window.locator('#settings-cleanup').click();
+    await expect(window.locator('#settings-dialog')).toBeHidden();
+  } else await app.evaluate(({ Menu }) => {
     const menu = Menu.getApplicationMenu()?.items.find((item) => item.label.replaceAll('&', '') === 'File');
     const item = menu?.submenu?.items.find((entry) => entry.label === 'Find unused assets…');
     if (!item || !item.enabled) throw new Error('Find unused assets menu action is unavailable');
@@ -430,6 +435,10 @@ async function launch({ firstRun = false } = {}) {
   if (firstRun) {
     await expect(window.locator('#welcome-choose')).toBeVisible();
     await expect(window.locator('#library-search')).toBeDisabled();
+    await window.locator('#settings-button').click();
+    await expect(window.locator('#settings-cleanup')).toBeDisabled();
+    await expect(window.locator('#settings-cleanup-help')).toHaveText('Choose a notes folder first.');
+    await doneSettings();
     await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, root);
     await window.locator('#welcome-choose').click();
   }
@@ -736,10 +745,28 @@ try {
   await openNote('syntax');
   await expectSyntax('plain');
   await expect(window.locator('#content .plain-preview')).toContainText('* TODO Text syntax');
+  // Watch through keystrokes and pending draft writes, not just the settled label.
+  await window.evaluate(() => {
+    const option = document.querySelector('#syntax-select option[value=auto]');
+    window.syntaxLabelChanges = [];
+    window.syntaxLabelObserver = new MutationObserver((changes) => {
+      window.syntaxLabelChanges.push(...changes.map(() => option.textContent));
+    });
+    window.syntaxLabelObserver.observe(option, { childList: true, characterData: true, subtree: true });
+  });
+  await source().focus();
+  await window.keyboard.press(`${modifier}+End`);
+  await window.keyboard.type(' # Keep the opened syntax', { delay: 30 });
   await listEnter('- Plain item', '- Plain item\n');
   await replaceSource('* TODO Text syntax\nPreserve café 日本語.\n');
   await waitSaved();
   expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
+  const syntaxLabelChanges = await window.evaluate(() => {
+    window.syntaxLabelObserver.disconnect();
+    return window.syntaxLabelChanges;
+  });
+  expect(syntaxLabelChanges).toEqual([]);
+  await expectSyntax('plain');
   await setSetting('#txt-syntax', 'org');
   await doneSettings();
   await expectSyntax('plain');
@@ -793,14 +820,22 @@ try {
   await waitSaved();
   expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
 
-  // Unsaved detection updates titles, preview, diagrams, and Org Enter together.
+  // Automatic syntax stays stable while typing and changes on reopening.
   await replaceSource('# Automatic Markdown\n\n```mermaid\nflowchart LR\nA-->B\n```');
+  await expectSyntax('plain');
+  await waitSaved();
+  await expectSyntax('plain');
+  await openNote('Welcome');
+  await openNote('syntax');
   await expectSyntax('markdown');
   await expect(window.locator('#note-title')).toHaveText('Automatic Markdown');
   await expect(window.locator('#document-title')).toHaveText('Automatic Markdown');
   await expect(window.locator('#content .diagram[data-rendered="true"]')).toHaveCount(1, { timeout: 20000 });
   await window.screenshot({ path: `test-results/${executablePath ? 'packaged' : 'desktop'}-syntax-detection.png` });
   await replaceSource('#+TITLE: Automatic Org\n\n- One');
+  await expectSyntax('markdown');
+  await openNote('Welcome');
+  await openNote('syntax');
   await expectSyntax('org');
   await expect(window.locator('#note-title')).toHaveText('Automatic Org');
   await expect(window.locator('#document-title')).toHaveText('Automatic Org');
@@ -944,12 +979,61 @@ try {
   expect((await window.evaluate(() => window.nvShift.initial())).settings.txtSyntax).toBe('markdown');
   await openNote('Welcome');
 
-  // Simulate a shortcut registration failure without reserving another app's shortcut.
-  await app.evaluate(({ globalShortcut }) => { globalThis.originalRegister = globalShortcut.register; globalShortcut.register = () => false; });
-  await window.evaluate(() => window.nvShift.updateSettings({ globalShortcut: 'Control+Alt+Shift+F12' }));
-  await expect(window.locator('#shortcut-status')).toHaveText('Shortcut unavailable');
+  // Recorder suppresses app/menu keys, resumes on cancel, and saves only on Apply.
+  await window.locator('#settings-button').click();
+  const originalShortcut = (await window.evaluate(() => window.nvShift.initial())).settings.globalShortcut;
+  expect(originalShortcut).toBe('Control+Alt+Space');
+  await window.locator('#record-shortcut').click();
+  await expect.poll(() => app.evaluate(({ globalShortcut }) => globalShortcut.isSuspended())).toBe(true);
+  await window.keyboard.press(`${modifier}+l`);
+  await expect(window.locator('#settings-dialog')).toBeVisible();
+  await expect(window.locator('#save-shortcut')).toBeEnabled();
+  expect((await window.evaluate(() => window.nvShift.initial())).settings.globalShortcut).toBe(originalShortcut);
+  await window.locator('#record-shortcut').click();
+  await window.keyboard.press('Escape');
+  await expect(window.locator('#settings-dialog')).toBeVisible();
+  await expect.poll(() => app.evaluate(({ globalShortcut }) => globalShortcut.isSuspended())).toBe(false);
+  await app.evaluate(({ globalShortcut }) => {
+    globalThis.originalRegister = globalShortcut.register;
+    globalShortcut.register = (accelerator, callback) => {
+      globalThis.shortcutCallback = callback;
+      return globalThis.originalRegister.call(globalShortcut, accelerator, callback);
+    };
+  });
+  await window.locator('#record-shortcut').click();
+  await window.keyboard.press('Control+Alt+Shift+F12');
+  await window.locator('#save-shortcut').click();
+  await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).settings.globalShortcut).toBe('Control+Alt+Shift+F12');
+  await expect(window.locator('#shortcut-registration')).toContainText(/Registered|Shortcut requested/);
+  // Invoking the captured callback checks window/focus wiring, not physical OS delivery.
+  await doneSettings();
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows().find((entry) => entry.webContents.getURL().endsWith('/index.html')).hide();
+    globalThis.shortcutCallback();
+  });
+  await expect(window.locator('#library-search')).toBeFocused();
+  expect((await window.evaluate(() => window.nvShift.initial())).shortcut.lastTriggeredAt).toBeGreaterThan(0);
+  // A failed replacement leaves the saved shortcut and old binding intact.
+  await app.evaluate(({ globalShortcut }) => { globalShortcut.register = () => false; });
+  const refused = await window.evaluate(async () => {
+    try { await window.nvShift.updateSettings({ globalShortcut: 'Control+Alt+Shift+F11' }); return false; }
+    catch { return true; }
+  });
+  expect(refused).toBe(true);
+  expect((await window.evaluate(() => window.nvShift.initial())).settings.globalShortcut).toBe('Control+Alt+Shift+F12');
+  await window.locator('#settings-button').click();
+  await expect(window.locator('#shortcut-error')).not.toBeEmpty();
+  await expect(window.locator('#shortcut-status')).not.toHaveText('Shortcut unavailable');
   await app.evaluate(({ globalShortcut }) => { globalShortcut.register = globalThis.originalRegister; });
-  await window.evaluate(() => window.nvShift.updateSettings({ globalShortcut: '' }));
+  await window.locator('#reset-shortcut').click();
+  await window.locator('#save-shortcut').click();
+  await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).settings.globalShortcut).toBe(originalShortcut);
+  await window.locator('#disable-shortcut').click();
+  await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).settings.globalShortcut).toBe('');
+  await expect(window.locator('#shortcut-registration')).toHaveText('Quick-access shortcut disabled.');
+  await window.locator('#record-shortcut').click();
+  await window.locator('#settings-done').click();
+  await expect.poll(() => app.evaluate(({ globalShortcut }) => globalShortcut.isSuspended())).toBe(false);
 
   // Removing a saved link keeps its image protected by this session's Undo
   // history, while older saved snapshots get a separate cleanup review group.
@@ -966,7 +1050,7 @@ try {
 
   const assetTrash = await installAssetTrashFixture();
   try {
-    await openCleanup();
+    await openCleanup({ settings: true });
     await expect(window.locator('#cleanup-dialog input[type="checkbox"]:checked')).toHaveCount(0);
     await expect(window.locator('#cleanup-trash')).toBeDisabled();
     await expect(cleanupItem('cleanup-unused.png')).toHaveAttribute('data-category', 'unused');
@@ -1100,7 +1184,7 @@ try {
   await expect(source()).toContainText('Renderer recovery marker', { timeout: 15000 });
   await waitSaved();
   expect(errors).toEqual([]);
-  console.log(`nvShift ${executablePath ? 'packaged' : 'development'} smoke passed: recursive search, arrow-result browsing/focus/flush/latest selection, content headings/unsaved titles/filename preference, keyboard creation, Org list continuation/Vim/:w/undo, all themes, mixed .txt detection/new-note defaults/manual overrides/Undo/Vim/restart, heading folding/Tab/gutters/Vim/search/state/restart, images, asset cleanup/recovery/Undo/Trash/revalidation, Mermaid, external saves/conflicts, rename, settings restart, sandbox, shortcut errors, background/relaunch.`);
+  console.log(`nvShift ${executablePath ? 'packaged' : 'development'} smoke passed: recursive search, arrow-result browsing/focus/flush/latest selection, content headings/unsaved titles/filename preference, keyboard creation, Org list continuation/Vim/:w/undo, all themes, mixed .txt detection/new-note defaults/manual overrides/Undo/Vim/restart, heading folding/Tab/gutters/Vim/search/state/restart, images, asset cleanup/recovery/Undo/Trash/revalidation, Mermaid, external saves/conflicts, rename, settings restart, sandbox, shortcut recording/rollback/callbacks, background/relaunch.`);
 } catch (error) {
   console.error('Smoke failure details:', JSON.stringify({ errors, state: await window?.evaluate(async () => {
     const initial = await window.nvShift.initial().then((state) => ({ library: state.library, document: state.document?.name })).catch((failure) => ({ error: failure.message }));
