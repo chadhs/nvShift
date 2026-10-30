@@ -252,7 +252,18 @@ test('replacing a note parent with a symlink cannot redirect an autosave outside
   const initial = f.library.active();
   await f.library.updateBuffer(initial.id, 'my preserved draft', 1, initial.revision);
   await fs.rename(path.join(f.root, 'nested'), path.join(f.root, 'backup'));
-  await fs.symlink(outside, path.join(f.root, 'nested'), process.platform === 'win32' ? 'junction' : 'dir');
+  // Windows can briefly retain a busy handle at the renamed directory's old
+  // path. Retry only that transient setup error; the safety assertions below
+  // still require the replacement link to exist before saving.
+  await waitFor(async () => {
+    try {
+      await fs.symlink(outside, path.join(f.root, 'nested'), process.platform === 'win32' ? 'junction' : 'dir');
+      return true;
+    } catch (error) {
+      if (process.platform === 'win32' && error.code === 'EBUSY') return false;
+      throw error;
+    }
+  });
   await f.library.save(initial.id).catch(() => {});
   assert.equal(await fs.readFile(path.join(outside, 'note.md'), 'utf8'), 'outside protected');
   assert.equal(f.library.get(initial.id).source, 'my preserved draft');
