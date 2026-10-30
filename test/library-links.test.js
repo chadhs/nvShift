@@ -343,17 +343,24 @@ test('a dirty directory replacement preserves both physical files and saves Keep
   assert.equal(await fs.readFile(path.join(movedDirectory, 'note.md'), 'utf8'), 'oldfolderbaseline');
 });
 
-test('linked Markdown, Org, and configured .txt resources resolve from the real note location', async (t) => {
+test('linked Markdown, Org, and detected .txt resources resolve from the real note location', async (t) => {
   const f = await fixture(t);
   const content = path.join(f.external, 'content');
   await put(f.external, 'media/chart.png', png);
   await put(f.external, 'content/other.md', '# Destination');
   for (const [name, source] of [['read.md', '![Chart](../media/chart.png)\n[Other](other.md#destination)'], ['read.org', '[[file:../media/chart.png]]\n[[file:other.md][Other]]'], ['read.txt', '[[file:../media/chart.png]]']]) await put(content, name, source);
+  // Ensure .txt detection cannot depend on which fixture write has the newest
+  // filesystem timestamp. Existing notes detect on activation, not indexing.
+  const newest = new Date(Date.now() + 60000);
+  await fs.utimes(path.join(content, 'other.md'), newest, newest);
   const alias = path.join(f.root, 'Linked'); await link(content, alias);
-  await f.library.open(f.root, { txtSyntax: 'org' });
+  await f.library.open(f.root, { txtSyntax: 'plain' });
+  assert.equal(f.library.active().name, 'other.md');
   for (const name of ['read.md', 'read.org', 'read.txt']) {
     let doc = await f.library.resolveIndexedPath(path.join(alias, name));
     assert.equal(doc.path, path.join(content, name));
+    doc = await f.library.activate(doc.id);
+    assert.equal(doc.format, name === 'read.md' ? 'markdown' : 'org');
     const preview = renderDocument(doc);
     assert.equal(preview.images.length, 1);
     const read = createImageReader(doc);
