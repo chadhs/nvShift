@@ -67,6 +67,21 @@ const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const source = () => window.locator('#editor .cm-content');
 const searchField = () => window.locator('#library-search');
 const highlightedResult = () => window.locator('#results .result-item[aria-selected="true"]');
+async function selectView(mode, { wait = true } = {}) {
+  const compact = window.locator('#compact-view');
+  if (await compact.isVisible()) await compact.selectOption(mode);
+  else await window.locator(`#view-${mode}`).click();
+  if (wait) await expect(window.locator('#workspace')).toHaveAttribute('data-view', mode);
+}
+async function openAppearance() {
+  const appearance = window.locator('#appearance-button');
+  if (await appearance.isVisible()) await appearance.click();
+  else {
+    await window.locator('#toolbar-more').click();
+    await window.locator('#workspace-menu').getByRole('menuitem', { name: 'Appearance', exact: true }).click();
+  }
+  await expect(window.locator('#settings-dialog')).toBeVisible();
+}
 async function expectHighlightedNote() {
   const id = await highlightedResult().getAttribute('data-id');
   await expect.poll(async () => (await window.evaluate(() => window.nvShift.initial())).document?.id).toBe(id);
@@ -109,7 +124,7 @@ async function listEnter(before, after) {
   await expect.poll(buffer).toBe(after);
 }
 async function setSetting(id, value) {
-  if (!await window.locator('#settings-dialog').isVisible()) await window.locator('#appearance-button').click();
+  if (!await window.locator('#settings-dialog').isVisible()) await openAppearance();
   const control = window.locator(id);
   if (typeof value === 'boolean') await control.setChecked(value); else await control.selectOption(value);
 }
@@ -158,7 +173,7 @@ async function checkEditorTabs() {
   const text = 'First line\nSecond line';
   await writeFile(path.join(root, 'Keyboard Tabs.txt'), text);
   await openNote('Keyboard Tabs');
-  await window.locator('#view-editor').click();
+  await selectView('editor');
   await window.locator('#syntax-select').selectOption('plain');
   await expectSyntax('plain', 'plain');
   await sourceLine('First line');
@@ -175,7 +190,7 @@ async function checkEditorTabs() {
   await editorTab('Shift+Tab', text);
   await searchExit();
 
-  await window.locator('#appearance-button').click();
+  await openAppearance();
   await expect(window.locator('#appearance-mode')).toBeFocused();
   await window.locator('#vim-mode').focus();
   await expect(window.locator('#vim-mode')).toBeFocused();
@@ -247,7 +262,7 @@ async function checkHeadingFolding() {
   await writeFile(path.join(root, 'Folding Setext.md'), 'Setext root\n===========\nSetext body marker.\n\nSetext child\n------------\nChild body.');
   await writeFile(path.join(root, 'Folding Text.txt'), '#+TITLE: Fold text\n* Text root\nText body.\n* Text next\nEnd.');
   await openNote('Folding');
-  await window.locator('#view-split').click();
+  await selectView('split');
   await expect(source()).toContainText('Root body marker.');
   await sourceLine('# Fold root');
   await window.keyboard.press('Tab');
@@ -274,7 +289,7 @@ async function checkHeadingFolding() {
   await setSetting('#appearance-mode', mode === 'dark' ? 'light' : 'dark'); await doneSettings();
   await expect(foldedSource()).toHaveCount(1);
   await setSetting('#appearance-mode', mode); await doneSettings();
-  await window.locator('#view-editor').click(); await window.locator('#view-split').click();
+  await selectView('editor'); await selectView('split');
   await expect(foldedSource()).toHaveCount(1);
   await setSetting('#vim-mode', true); await doneSettings();
   await expect(foldedSource()).toHaveCount(1);
@@ -336,9 +351,11 @@ async function checkHeadingFolding() {
   await source().focus(); await window.keyboard.press('Escape');
   await window.keyboard.type('u'); await expect.poll(buffer).toBe(markdown);
   await window.keyboard.type('gg0i');
-  // Dispatch Vim Ctrl+O directly so Electron's Ctrl+O folder accelerator on
-  // Linux/Windows cannot intercept this transient Normal-mode fixture.
-  await source().evaluate((element) => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', code: 'KeyO', ctrlKey: true, bubbles: true, cancelable: true })));
+  // Establish Vim's transient Normal mode without the reserved Choose Folder
+  // action: synthetic dispatch bypasses Electron, and repeat bypasses the app
+  // command router while leaving Vim's own key handling intact.
+  await source().evaluate((element) => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', code: 'KeyO', ctrlKey: true, repeat: true, bubbles: true, cancelable: true })));
+  await expect.poll(() => source().evaluate((element) => Boolean(element.cmTile?.root?.view.cm?.state.vim?.insertModeReturn))).toBe(true);
   await window.keyboard.press('Tab'); await expect(foldedSource()).toHaveCount(0);
   await expect(source()).toBeFocused(); expect(await buffer()).toBe(markdown);
   await source().focus(); await window.keyboard.press('Escape');
@@ -431,6 +448,9 @@ async function restoreAssetTrashFixture() {
 async function launch({ firstRun = false } = {}) {
   app = await electron.launch({ executablePath, args: [...appArgs, ...(firstRun ? [] : [`--library=${root}`]), profileArg], env, chromiumSandbox: true, timeout: 30000 });
   window = await app.firstWindow();
+  // Exercise the compact toolbar through native bounds and titlebar geometry.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((entry) => entry.webContents.getURL().endsWith('/index.html')).setContentSize(1000, 760));
+  await expect.poll(() => window.evaluate(() => innerWidth)).toBe(1000);
   window.on('pageerror', (error) => errors.push(error.message));
   if (firstRun) {
     await expect(window.locator('#welcome-choose')).toBeVisible();
@@ -493,7 +513,7 @@ try {
   expect(await readFile(edited.path, 'utf8')).toContain('Keyboard browse flush marker.');
 
   // Browsing respects the current Split/Preview view; Enter chooses editing.
-  await window.locator('#view-split').click();
+  await selectView('split');
   await window.keyboard.press(`${modifier}+l`);
   await searchField().press('ArrowUp');
   await expectHighlightedNote();
@@ -501,7 +521,7 @@ try {
   await expect(window.locator('#content')).toContainText('Cobalt');
   await expect(window.locator('#document-title')).toHaveText(await window.locator('#note-title').textContent());
   await expect(searchField()).toBeFocused();
-  await window.locator('#view-preview').click();
+  await selectView('preview');
   await window.keyboard.press(`${modifier}+l`);
   await searchField().press('ArrowDown');
   const previewId = await expectHighlightedNote();
@@ -581,7 +601,7 @@ try {
   await openNote('Linked', 'Linked note');
   await expect(window.locator('#note-folder')).toHaveText('linked');
   expect((await window.evaluate(() => window.nvShift.initial())).document.path).toBe(await realpath(path.join(linkedRoot, 'Linked.md')));
-  await window.locator('#view-split').click();
+  await selectView('split');
   await expect(window.locator('#content .image-preview[data-loaded="true"]')).toHaveCount(1, { timeout: 15000 });
   await source().click();
   await window.keyboard.press(`${modifier}+End`);
@@ -604,7 +624,7 @@ try {
   await expect(window.locator('#content .image-preview[data-loaded="true"]')).toHaveCount(1, { timeout: 15000 });
 
   await openNote('Welcome', 'Welcome to nvShift');
-  await window.locator('#view-split').click();
+  await selectView('split');
   await expect(window.locator('#content')).toContainText('searchable keyboard notebook', { timeout: 20000 });
   await expect(window.locator('#content .image-preview[data-loaded="true"]')).toHaveCount(2, { timeout: 20000 });
   await expect(window.locator('#content .diagram[data-rendered="true"]')).toHaveCount(1, { timeout: 20000 });
@@ -625,7 +645,7 @@ try {
     });
   });
   try {
-    await window.locator('#view-editor').click();
+    await selectView('editor', { wait: false });
     await expect.poll(() => app.evaluate(() => globalThis.smokeViewSettings.started)).toBe(true);
     await search('Headings');
     await app.evaluate(() => globalThis.smokeViewSettings.release());
@@ -649,7 +669,7 @@ try {
   await expect(window.locator('#note-title')).toHaveText('Headings');
   await replaceSource(headingSource);
   await expect(window.locator('#note-title')).toHaveText('Original heading 日本語');
-  await window.locator('#view-split').click();
+  await selectView('split');
   await expect(window.locator('#document-title')).toHaveText('Original heading 日本語');
   await expect(window.locator('#content h2')).toHaveCount(0);
   await window.locator('#content a[href="#document-title"]').click();
@@ -821,7 +841,7 @@ try {
   expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
 
   // New notes now select Editor; request the combined view for preview checks.
-  await window.locator('#view-split').click();
+  await selectView('split');
   // Automatic syntax stays stable while typing and changes on reopening.
   await replaceSource('# Automatic Markdown\n\n```mermaid\nflowchart LR\nA-->B\n```');
   await expectSyntax('plain');
@@ -845,8 +865,11 @@ try {
   await window.keyboard.press(`${modifier}+End`);
   await window.keyboard.press('Enter');
   await expect.poll(buffer).toBe('#+TITLE: Automatic Org\n\n- One\n- ');
+  const caretBeforeVimSettings = await sourceCaret();
   await setSetting('#vim-mode', true);
   await doneSettings();
+  await expect(source()).toBeFocused();
+  await expect.poll(sourceCaret).toEqual(caretBeforeVimSettings);
   await source().focus();
   await window.keyboard.press('Escape');
   await window.keyboard.type('A');

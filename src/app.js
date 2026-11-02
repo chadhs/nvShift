@@ -477,9 +477,10 @@ async function setNoteSyntax(id, mode, bookmark) {
 }
 async function setView(mode) {
   if (!workspace) return;
-  const pane = activePane(), focused = pane?.editor?.view.hasFocus;
+  const pane = activePane(), focused = pane?.editor?.view.hasFocus, focusTarget = document.activeElement;
   if (workspace.layout === 'single') await updateSettings({ viewMode: mode });
-  await workspaceCommand('setView', { mode }); if (focused && mode !== 'preview') activePane()?.focus();
+  await workspaceCommand('setView', { mode });
+  if (focused && mode !== 'preview' && activePane() === pane && document.activeElement === focusTarget) pane.focus();
 }
 async function insertImages(id, bookmark, operation) {
   await navigate(async () => { const result = await operation(); const pane = paneFor(id); if (!pane) throw new Error('The image was imported, but the original note is no longer displayed. Reopen it before inserting another image.'); pane.insert(id, result.text, bookmark); });
@@ -493,8 +494,13 @@ function noteAction(action, id) {
   else if (action === 'keep-both' || action === 'use-disk') run(navigate(async () => { const next = await api.resolveConflict(id, action); drafts.delete(id); if (next) { drafts.delete(next.id); acceptDocument(next); if (next.id !== id) acceptState(await api.workspace({ type: 'open', id: next.id, disposition: 'new-tab' })); } else acceptState(await api.initial()); }));
 }
 async function cycleTab(direction, groupId = workspace?.focusedGroupId) { const group = workspace?.groups.find((g) => g.id === groupId); if (!group?.tabs.length) return; const at = group.tabs.findIndex((t) => t.id === group.activeTabId); await workspaceCommand('selectTab', { groupId, tabId: group.tabs[(at + direction + group.tabs.length) % group.tabs.length].id }); activePane()?.focus(); }
-function openSettings(focus = '#appearance-mode') {
-  if (!$('#settings-dialog').open) { settingsBookmark = pendingSettingsBookmark && performance.now() - pendingSettingsBookmark.at < 1000 ? pendingSettingsBookmark.value : activePane()?.bookmark(); pendingSettingsBookmark = null; $('#settings-dialog').showModal(); }
+function rememberSettingsFocus() { pendingSettingsBookmark = { at: performance.now(), value: activePane()?.bookmark() }; }
+function takeSettingsBookmark() {
+  const bookmark = pendingSettingsBookmark && performance.now() - pendingSettingsBookmark.at < 1000 ? pendingSettingsBookmark.value : activePane()?.bookmark();
+  pendingSettingsBookmark = null; return bookmark;
+}
+function openSettings(focus = '#appearance-mode', bookmark = takeSettingsBookmark()) {
+  if (!$('#settings-dialog').open) { settingsBookmark = bookmark; $('#settings-dialog').showModal(); }
   requestAnimationFrame(() => $(focus)?.focus());
 }
 async function closeSettings() { await shortcutRecorder.cancel(); let pending; do { pending = settingsQueue; await pending.catch(() => {}); } while (pending !== settingsQueue); const bookmark = settingsBookmark; settingsBookmark = null; $('#settings-dialog').close(); paneFor(bookmark?.id)?.restoreSelection(bookmark); }
@@ -538,10 +544,13 @@ $('#toggle-documents').addEventListener('click', () => run(workspaceCommand('tog
 $('#find-button').addEventListener('click', () => activePane()?.find());
 $('#appearance-button').addEventListener('click', () => openSettings());
 $('#settings-button').addEventListener('click', () => openSettings('#vim-mode'));
-$('#toolbar-more').addEventListener('click', (event) => showMenu(event, [{ label: 'New tab', action: () => workspaceCommand('newTab').then(focusSearch) }, { label: 'Appearance', action: () => openSettings() }, { label: 'Two documents', action: () => workspaceCommand('toggleLayout').then(focusSearch) }, { label: 'Keyboard shortcuts', action: () => keyboardHelp.open(true) }]));
-$('#toolbar-more').addEventListener('pointerdown', () => keyboardHelp.rememberFocus());
-$('#toolbar-more').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') keyboardHelp.rememberFocus(); });
-for (const control of [$('#appearance-button'), $('#settings-button')]) control.addEventListener('pointerdown', () => { pendingSettingsBookmark = { at: performance.now(), value: activePane()?.bookmark() }; });
+$('#toolbar-more').addEventListener('click', (event) => {
+  const bookmark = takeSettingsBookmark();
+  showMenu(event, [{ label: 'New tab', action: () => workspaceCommand('newTab').then(focusSearch) }, { label: 'Appearance', action: () => openSettings('#appearance-mode', bookmark) }, { label: 'Two documents', action: () => workspaceCommand('toggleLayout').then(focusSearch) }, { label: 'Keyboard shortcuts', action: () => keyboardHelp.open(true) }]);
+});
+$('#toolbar-more').addEventListener('pointerdown', () => { keyboardHelp.rememberFocus(); rememberSettingsFocus(); });
+$('#toolbar-more').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { keyboardHelp.rememberFocus(); rememberSettingsFocus(); } });
+for (const control of [$('#appearance-button'), $('#settings-button')]) control.addEventListener('pointerdown', rememberSettingsFocus);
 $('#settings-dialog').addEventListener('close', () => { if ($('#settings-dialog').open) return; run(shortcutRecorder.cancel()); const bookmark = settingsBookmark; settingsBookmark = null; paneFor(bookmark?.id)?.restoreSelection(bookmark); });
 $('#settings-dialog').addEventListener('cancel', (event) => { event.preventDefault(); run(closeSettings()); });
 $('#close-settings').addEventListener('click', () => run(closeSettings()));

@@ -123,6 +123,8 @@ function createWindow() {
   uiReady = false;
   win = new BrowserWindow({
     ...titlebarOptions(), show: false, width: 1280, height: 850, minWidth: 760, minHeight: 520,
+    // Let native smoke tests cover wide layouts on smaller macOS CI displays.
+    ...(process.env.NVSHIFT_SMOKE_LARGE_WINDOWS === '1' ? { enableLargerThanScreen: true } : {}),
     title: 'nvShift', icon: iconPath, backgroundColor: '#f5f4ef',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });

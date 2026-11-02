@@ -17,6 +17,8 @@ tabs overflow.
 The existing Split view is renamed Editor + preview and remains available for a
 single document. Tabs, overflow menus, and layout controls occupy the existing
 64-pixel toolbar without adding rows or pushing document content downward.
+Compact view changes respect search focus, and More → Appearance restores the
+editor's cursor and selection after Settings closes.
 
 A lifebuoy beside Settings opens a platform-specific keyboard-shortcut reference,
 also available through More or =?= outside editable controls. Question marks in

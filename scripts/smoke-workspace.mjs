@@ -15,7 +15,7 @@ await writeFile(path.join(root, 'assets', 'pixel.png'), await readFile('build/ic
 const names = ['Alpha', 'Beta', 'Gamma', 'Delta', ...Array.from({ length: 8 }, (_, index) => `Long document ${index + 1} with a filename that must fit without growing the toolbar`)];
 for (const [index, name] of names.entries()) await writeFile(path.join(root, `${name}.md`), `# ${name}\n\nDocument body ${index}.\n\n![Image](assets/pixel.png)\n\n\`\`\`mermaid\nflowchart LR\nNode${index}-->Done\n\`\`\`\n`);
 const executablePath = process.env.NVSHIFT_EXECUTABLE;
-const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+const env = { ...process.env, NVSHIFT_SMOKE_LARGE_WINDOWS: '1' }; delete env.ELECTRON_RUN_AS_NODE;
 const args = [...(executablePath ? [] : ['.']), `--library=${root}`, `--user-data-dir=${profile}`];
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 let app, window;
@@ -30,6 +30,7 @@ async function launch() {
   app = await electron.launch({ executablePath, args, env, chromiumSandbox: true, timeout: 30000 });
   window = await app.firstWindow();
   window.on('pageerror', (error) => errors.push(error.message));
+  await resize(1280);
   await expect(field()).toBeEnabled({ timeout: 20000 });
   await expect.poll(async () => Boolean((await state()).workspace)).toBe(true);
 }
@@ -68,9 +69,10 @@ async function waitSaved() {
   await expect.poll(async () => Object.values((await state()).documents).every((doc) => doc.status === 'saved'), { timeout: 15000 }).toBe(true);
 }
 async function resize(width) {
+  // Resize native content so titlebar overlay geometry matches the CSS viewport.
+  // The test-only launch flag permits large windows on smaller macOS CI screens.
   await app.evaluate(({ BrowserWindow }, width) => {
-    const main = BrowserWindow.getAllWindows().find((entry) => entry.webContents.getURL().endsWith('/index.html'));
-    main.setSize(width, 900);
+    BrowserWindow.getAllWindows().find((entry) => entry.webContents.getURL().endsWith('/index.html')).setContentSize(width, 900);
   }, width);
   await expect.poll(() => window.evaluate(() => innerWidth)).toBe(width);
 }
