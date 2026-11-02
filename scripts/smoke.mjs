@@ -545,12 +545,12 @@ try {
   await search('duplicate');
   await expect(window.locator('#results .result-item:not(.create-result)')).toHaveCount(2);
   await app.evaluate(({ ipcMain }) => {
-    const original = ipcMain._invokeHandlers.get('note:open');
-    if (typeof original !== 'function') throw new Error('Missing note:open fixture handler');
+    const original = ipcMain._invokeHandlers.get('workspace:command');
+    if (typeof original !== 'function') throw new Error('Missing workspace:command fixture handler');
     const gate = globalThis.smokeBrowseOpen = { original, started: false, release: null };
-    ipcMain.removeHandler('note:open');
-    ipcMain.handle('note:open', async (...args) => {
-      if (!gate.started) {
+    ipcMain.removeHandler('workspace:command');
+    ipcMain.handle('workspace:command', async (...args) => {
+      if (!gate.started && args[1]?.type === 'open' && args[1]?.disposition === 'browse') {
         gate.started = true;
         await new Promise((resolve) => { gate.release = resolve; });
       }
@@ -572,8 +572,8 @@ try {
     await app.evaluate(({ ipcMain }) => {
       const gate = globalThis.smokeBrowseOpen;
       gate.release?.();
-      ipcMain.removeHandler('note:open');
-      ipcMain.handle('note:open', gate.original);
+      ipcMain.removeHandler('workspace:command');
+      ipcMain.handle('workspace:command', gate.original);
       delete globalThis.smokeBrowseOpen;
     });
   }
@@ -820,6 +820,8 @@ try {
   await waitSaved();
   expect(await readFile(path.join(root, 'syntax.txt'))).toEqual(txtBytes);
 
+  // New notes now select Editor; request the combined view for preview checks.
+  await window.locator('#view-split').click();
   // Automatic syntax stays stable while typing and changes on reopening.
   await replaceSource('# Automatic Markdown\n\n```mermaid\nflowchart LR\nA-->B\n```');
   await expectSyntax('plain');
@@ -1197,3 +1199,6 @@ try {
   await new Promise((resolve) => server.close(resolve));
   await rm(directory, { recursive: true, force: true });
 }
+
+// Run workspace checks for development and every packaged-app caller.
+await import('./smoke-workspace.mjs');

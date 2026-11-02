@@ -7,6 +7,8 @@ const { randomUUID } = require('node:crypto');
 const { createSettings, validate } = require('./settings.cjs');
 const { createShortcutController } = require('./shortcuts.cjs');
 const { createLibrary } = require('./library.cjs');
+const { shortcut } = require('./shortcut-catalog.cjs');
+const { createWorkspace } = require('./workspace.cjs');
 const { createDiagramRenderer } = require('./diagrams.cjs');
 const { createResources } = require('./resources.cjs');
 const { insertImageBytes, insertImageFiles } = require('./assets.cjs');
@@ -29,7 +31,7 @@ const iconPath = app.isPackaged ? path.join(process.resourcesPath, 'icon.png') :
 const trayDirectory = app.isPackaged ? path.join(process.resourcesPath, 'tray') : path.join(__dirname, '../build');
 const page = path.join(__dirname, '../dist/index.html');
 const pageURL = pathToFileURL(page).href;
-let win, tray, settings, library, resources, diagramRenderer, cleanup;
+let win, tray, settings, library, resources, diagramRenderer, cleanup, workspace;
 let quitting = false, quitReady = false, uiReady = false, hiding = false;
 let shortcuts;
 let pendingFocusSearch = false;
@@ -46,7 +48,7 @@ function report(error) {
   console.error(message);
 }
 function state() {
-  return { settings: settings.snapshot(library.snapshot().root), library: library.snapshot(), document: library.active(), shortcut: shortcuts?.snapshot() };
+  return { settings: settings.snapshot(library.snapshot().root), library: library.snapshot(), document: workspace?.active() ?? null, workspace: workspace?.snapshot(), documents: workspace?.documents() ?? {}, shortcut: shortcuts?.snapshot() };
 }
 function broadcast() { if (uiReady) win?.webContents.send('app:state', state()); }
 function showWindow(focusSearch = true) {
@@ -132,7 +134,7 @@ function createWindow() {
     uiReady = false;
     void endShortcutRecording();
     resources?.dispose();
-    resources = createResources(library, diagramRenderer);
+    resources = createResources(library, diagramRenderer, { visibleIds: () => workspace?.visibleIds() ?? [] });
     // Main-owned buffers survive a renderer crash; rebuilding the view restores them.
     if (!quitting && win && !win.isDestroyed()) win.webContents.reload();
   });
@@ -152,13 +154,27 @@ function handle(channel, callback) {
 async function openLibrary(root) {
   await flushAll();
   const canonical = await fs.realpath(root);
-  await library.open(canonical, settings.snapshot(canonical));
-  await settings.setRoot(canonical);
+  await workspace.flush();
+  const previousRoot = library.snapshot().root;
+  const previousWorkspace = workspace.snapshot();
+  try {
+    await library.open(canonical, settings.snapshot(canonical));
+    await settings.setRoot(canonical);
+    await workspace.reset({ viewMode: settings.snapshot().viewMode });
+  } catch (error) {
+    if (previousRoot) {
+      await library.open(previousRoot, settings.snapshot(previousRoot));
+      await workspace.restore(previousWorkspace);
+      await settings.setRoot(previousRoot);
+    }
+    throw error;
+  }
   broadcast();
   return state();
 }
 function installHandlers() {
   ipcMain.on('app:renderer-flushed', (event, requestId, error) => { if (trusted(event) && typeof requestId === 'string') flushRequests.get(requestId)?.(error); });
+  ipcMain.on('workspace:invalidate-browse', (event, groupId, generation, token) => { if (trusted(event)) workspace.invalidateBrowse(groupId, generation, token); });
   ipcMain.on('asset:authorize-drop', (event, file) => {
     if (trusted(event) && typeof file === 'string' && file.length < 32768 && !file.includes('\0')) {
       authorizedDrops.set(file, Date.now() + 60000);
@@ -180,8 +196,13 @@ function installHandlers() {
     return choice.canceled ? null : openLibrary(choice.filePaths[0]);
   });
   handle('library:search', (query) => library.search(query));
-  handle('note:create', (title, extension) => library.create(title, extension));
-  handle('note:open', (id) => library.activate(id));
+  handle('workspace:command', async (request) => {
+    const result = await workspace.command(request);
+    resources.syncVisibility();
+    return result;
+  });
+  handle('note:create', async (title, extension) => (await workspace.command({ type: 'create', title, extension })).document);
+  handle('note:open', async (id) => (await workspace.command({ type: 'open', id })).document);
   handle('note:update', (id, source, clientVersion, baseRevision) => library.updateBuffer(id, source, clientVersion, baseRevision));
   handle('note:save', (id) => library.save(id));
   handle('note:syntax', (id, mode) => library.setSyntax(id, mode));
@@ -197,6 +218,7 @@ function installHandlers() {
       updated = await shortcuts.update(valid.globalShortcut);
     } else updated = await settings.update(valid, library.snapshot().root);
     if (Object.hasOwn(patch, 'defaultExtension') || Object.hasOwn(patch, 'txtSyntax')) await library.setPreferences(updated);
+    if (Object.hasOwn(patch, 'viewMode') && workspace.snapshot().layout === 'single') await workspace.command({ type: 'setView', mode: updated.viewMode });
     broadcast();
     return updated;
   });
@@ -240,7 +262,9 @@ function installHandlers() {
     const { file, fragment } = resolveDocumentLink(note.path, resource.target);
     const target = await library.resolveIndexedPath(file);
     if (!target) throw new Error('That note is not reachable from the selected notes folder.');
-    return { document: await library.activate(target.id), fragment };
+    const groupId = workspace.snapshot().groups.find((group) => group.displayedDocumentId === id)?.id;
+    const response = await workspace.command({ type: 'open', id: target.id, groupId });
+    return { ...response, fragment };
   });
   handle('link:external', async (value) => {
     if (typeof value !== 'string' || value.length > 8192) throw new Error('Invalid link.');
@@ -252,19 +276,28 @@ function installHandlers() {
 function installMenu() {
   const fire = (name) => () => { if (!shortcuts?.snapshot().recording) command(name); };
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    ...(process.platform === 'darwin' ? [{ label: 'nvShift', submenu: [{ role: 'about' }, { label: 'Settings…', accelerator: 'Cmd+,', click: fire('settings') }, { type: 'separator' }, { role: 'services' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { label: 'Quit nvShift', accelerator: 'Cmd+Q', click: () => void quit() }] }] : []),
+    ...(process.platform === 'darwin' ? [{ label: 'nvShift', submenu: [{ role: 'about' }, { label: 'Settings…', accelerator: shortcut('settings').accelerator, click: fire('settings') }, { type: 'separator' }, { role: 'services' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { label: 'Quit nvShift', accelerator: shortcut('quit').accelerator, click: () => void quit() }] }] : []),
     { label: 'File', submenu: [
-      { label: 'Search or create note', accelerator: 'CmdOrCtrl+L', click: fire('focus-search') },
-      { label: 'Choose notes folder…', accelerator: 'CmdOrCtrl+O', click: fire('choose-library') },
+      { label: 'Search or create note', accelerator: shortcut('focus-search').accelerator, click: fire('focus-search') },
+      { label: 'Choose notes folder…', accelerator: shortcut('choose-library').accelerator, click: fire('choose-library') },
       { label: 'Find unused assets…', click: fire('asset-cleanup') },
-      { label: 'Save note', accelerator: 'CmdOrCtrl+S', click: fire('save') },
-      { type: 'separator' }, { label: 'Hide window', accelerator: 'CmdOrCtrl+W', click: () => void hideWindow() },
-      ...(process.platform === 'darwin' ? [] : [{ label: 'Settings…', accelerator: 'Ctrl+,', click: fire('settings') }, { label: 'Quit nvShift', accelerator: 'Ctrl+Q', click: () => void quit() }]),
+      { label: 'Save note', accelerator: shortcut('save').accelerator, click: fire('save') },
+      { label: 'New tab', accelerator: shortcut('new-tab').accelerator, click: fire('new-tab') },
+      { label: 'Open selected note in new tab', click: fire('open-new-tab') },
+      { label: 'Close tab', accelerator: shortcut('close-tab').accelerator, click: fire('close-tab') },
+      { type: 'separator' }, { label: 'Hide window', click: () => void hideWindow() },
+      ...(process.platform === 'darwin' ? [] : [{ label: 'Settings…', accelerator: shortcut('settings').accelerator, click: fire('settings') }, { label: 'Quit nvShift', accelerator: shortcut('quit').accelerator, click: () => void quit() }]),
     ] },
     { role: 'editMenu' },
     { label: 'View', submenu: [
-      { label: 'Find in note', accelerator: 'CmdOrCtrl+F', click: fire('find') },
-      { label: 'Cycle editor / split / preview', accelerator: 'CmdOrCtrl+Shift+P', click: fire('cycle-view') },
+      { label: 'Find in note', accelerator: shortcut('find').accelerator, click: fire('find') },
+      { label: 'Two documents', accelerator: shortcut('toggle-layout').accelerator, click: fire('toggle-layout') },
+      { label: 'Focus left pane', accelerator: shortcut('focus-left').accelerator, click: fire('focus-left') },
+      { label: 'Focus right pane', accelerator: shortcut('focus-right').accelerator, click: fire('focus-right') },
+      { label: 'Next tab', accelerator: shortcut('next-tab').accelerator, click: fire('next-tab') },
+      { label: 'Previous tab', accelerator: shortcut('previous-tab').accelerator, click: fire('previous-tab') },
+      { label: 'Move tab to other pane', click: fire('move-tab') },
+      { label: 'Cycle editor / editor + preview / preview', accelerator: shortcut('cycle-view').accelerator, click: fire('cycle-view') },
       { label: 'Folding', submenu: [
         { label: 'Toggle heading', click: fire('toggle-heading') },
         { label: 'Expand all', click: fire('expand-folds') },
@@ -285,14 +318,16 @@ else {
     settings = await createSettings(app.getPath('userData'));
     library = createLibrary({
       userData: app.getPath('userData'), trashItem: (file) => shell.trashItem(file),
-      onDocument: (doc) => { resources?.changed(doc); if (uiReady) { win?.webContents.send('note:changed', doc); if (!doc) broadcast(); } },
+      onDocument: (doc) => { resources?.changed(doc); workspace?.changed(doc); if (uiReady) win?.webContents.send('note:changed', doc); },
+      onRemoved: (id) => { workspace?.removed(id); if (uiReady) win?.webContents.send('note:removed', id); },
       onLibrary: (value) => { if (uiReady) win?.webContents.send('library:changed', value); },
       onError: report,
     });
+    workspace = createWorkspace({ library, onChange: () => { resources?.syncVisibility(); broadcast(); } });
     cleanup = createAssetCleanup({ library, userData: app.getPath('userData'), trashItem: (file) => shell.trashItem(file),
       onProgress: (value) => { if (uiReady) win?.webContents.send('asset:cleanup', value); } });
     diagramRenderer = createDiagramRenderer();
-    resources = createResources(library, diagramRenderer);
+    resources = createResources(library, diagramRenderer, { visibleIds: () => workspace?.visibleIds() ?? [] });
     session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
     session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (_details, callback) => callback({ cancel: true }));
@@ -313,6 +348,7 @@ else {
         broadcast();
       },
     });
+    await workspace.reset({ viewMode: settings.snapshot().viewMode });
     installHandlers(); installMenu(); createTray();
     await shortcuts.initialize(); createWindow();
   }).catch((error) => { console.error(error); dialog.showErrorBox('nvShift could not start', error.message); quitReady = true; app.quit(); });

@@ -4,8 +4,8 @@ const path = require('node:path');
 // Resource authorization uses an independent analysis of main-owned source.
 // A worker thread keeps parsing off the main event loop; it is not an OS sandbox.
 function createAnalyzer({ workerPath = path.join(__dirname, 'analysis-worker.cjs'), timeoutMs = 15000 } = {}) {
-  const jobs = new Set();
-  function analyze(doc) {
+  const jobs = new Map();
+  function analyze(doc, { scope = doc } = {}) {
     return new Promise((resolve, reject) => {
       let worker, timer, finished = false;
       function finish(error, index) {
@@ -16,7 +16,7 @@ function createAnalyzer({ workerPath = path.join(__dirname, 'analysis-worker.cjs
         void worker?.terminate();
         if (error) reject(error); else resolve(index);
       }
-      jobs.add(finish);
+      jobs.set(finish, { scope, id: doc.id });
       try {
         worker = new Worker(workerPath, { workerData: doc, resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 4 } });
         worker.once('message', (result) => result.error ? finish(new Error(result.error)) : finish(null, result.index));
@@ -26,7 +26,11 @@ function createAnalyzer({ workerPath = path.join(__dirname, 'analysis-worker.cjs
       } catch (error) { finish(error); }
     });
   }
-  const cancel = () => { for (const finish of jobs) finish(new Error('The document changed')); };
+  const cancel = (scope) => {
+    for (const [finish, job] of jobs) {
+      if (scope === undefined || job.scope === scope || (typeof scope === 'string' && job.id === scope)) finish(new Error('The document changed'));
+    }
+  };
   return { analyze, cancel };
 }
 module.exports = { createAnalyzer };

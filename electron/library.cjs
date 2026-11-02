@@ -128,7 +128,7 @@ class SearchClient {
  * A main-process note library. Callback snapshots are detached from mutable state.
  * @param {{userData:string,onDocument?:Function,onLibrary?:Function,onError?:Function,trashItem?:Function,writeAtomic?:Function}} options
  */
-function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, onError = () => {}, trashItem, writeAtomic = atomicReplace, writeSyntaxAtomic = atomicReplace, syntaxDetector = createSyntaxDetector() }) {
+function createLibrary({ userData, onDocument = () => {}, onRemoved = () => {}, onLibrary = () => {}, onError = () => {}, trashItem, writeAtomic = atomicReplace, writeSyntaxAtomic = atomicReplace, syntaxDetector = createSyntaxDetector() }) {
   if (typeof userData !== 'string') throw new Error('A recovery-data directory is required.');
   let root = null;
   const watchers = new Map();
@@ -140,6 +140,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
   let index = null;
   let activeId = null;
   let navigationQueue = Promise.resolve();
+  const openedDocuments = new Set(), recoveredDocuments = new Set();
   let indexing = false;
   let disposed = false;
   let generation = 0;
@@ -220,7 +221,9 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
       }
     } else retired.delete(record.id);
     clearTimeout(record.timer); records.delete(record.id); paths.delete(pathKey(record.path));
+    openedDocuments.delete(record.id); recoveredDocuments.delete(record.id);
     await index.call('remove', record.id);
+    onRemoved(record.id);
     if (activeId === record.id && !records.has(record.id)) { activeId = null; emitDocument(null); }
     emitLibrary();
   };
@@ -642,6 +645,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
           }
           await syntaxState.set(record.path, record);
         }
+        recoveredDocuments.add(record.id);
         record.source = recovery.source; record.clientVersion = Number.isSafeInteger(recovery.clientVersion) ? recovery.clientVersion : 0;
         record.revision = Math.max(record.revision, Number.isSafeInteger(recovery.revision) ? recovery.revision + 1 : 1);
         record.status = sameDisk && !recovery.conflict ? 'dirty' : 'conflict';
@@ -670,6 +674,23 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
     },
     active: () => document(records.get(activeId)),
     get: (id) => document(records.get(id)),
+    documents: () => [...records.values()].map(document).filter(Boolean),
+    recoveredDocuments: () => [...recoveredDocuments].map((id) => document(records.get(id))).filter(Boolean),
+    async openDocument(id) {
+      const record = requireRecord(id);
+      return enqueue(record, async () => {
+        if (!openedDocuments.has(id)) {
+          await resolveSyntax(record); await updateIndex(record); openedDocuments.add(id);
+        }
+        return document(record);
+      });
+    },
+    async focusDocument(id) {
+      if (id == null) { activeId = null; emitDocument(null); return null; }
+      const record = requireRecord(id);
+      return enqueue(record, () => { activeId = id; emitDocument(record); return document(record); });
+    },
+    releaseDocument(id) { openedDocuments.delete(id); },
     getByPath: (file) => document(records.get(paths.get(pathKey(file)))),
     async resolveIndexedPath(file) {
       try {
@@ -704,7 +725,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
       await topologyQueue; topologyQueue = Promise.resolve();
       const nextSyntaxState = await createNoteSyntaxState({ userData, root: canonical, writeAtomic: writeSyntaxAtomic });
       await index?.close(); index = null;
-      root = canonical; records.clear(); paths.clear(); retired.clear(); retiredActiveId = null; problems.clear(); pendingPaths.clear(); topologyProblems.clear(); activeId = null;
+      root = canonical; openedDocuments.clear(); recoveredDocuments.clear(); records.clear(); paths.clear(); retired.clear(); retiredActiveId = null; problems.clear(); pendingPaths.clear(); topologyProblems.clear(); activeId = null;
       syntaxState = nextSyntaxState;
       preferences = { defaultExtension: EXTENSIONS.has(selectedPreferences.defaultExtension) ? selectedPreferences.defaultExtension : 'md', txtSyntax: SYNTAXES.has(selectedPreferences.txtSyntax) ? selectedPreferences.txtSyntax : 'plain' };
       index = new SearchClient(); indexing = true; emitLibrary();
@@ -718,7 +739,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
         await Promise.all([...watcherTasks]);
         activeId ??= [...records.values()].sort((a, b) => b.modified - a.modified)[0]?.id ?? null;
         const initial = records.get(activeId);
-        if (initial) await enqueue(initial, async () => { await resolveSyntax(initial); await updateIndex(initial); });
+        if (initial) await enqueue(initial, async () => { await resolveSyntax(initial); await updateIndex(initial); openedDocuments.add(initial.id); });
         emitLibrary(); emitDocument(records.get(activeId));
         return snapshot();
       } catch (error) {
@@ -729,7 +750,7 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
     async search(query) { return index ? index.call('search', query) : { results: [], total: 0, query: String(query ?? '') }; },
     async create(title, extension) {
       await controller.flush();
-      const record = await createFile(title, extension); activeId = record.id; emitDocument(record);
+      const record = await createFile(title, extension); openedDocuments.add(record.id); activeId = record.id; emitDocument(record);
       return document(record);
     },
     async activate(id) {
@@ -738,7 +759,11 @@ function createLibrary({ userData, onDocument = () => {}, onLibrary = () => {}, 
         if (previous && previous.id !== id) await enqueue(previous, () => saveRecord(previous));
         const record = requireRecord(id);
         return enqueue(record, async () => {
-          if (activeId !== record.id) { await resolveSyntax(record); await updateIndex(record); }
+          if (activeId !== record.id) {
+            if (activeId) openedDocuments.delete(activeId);
+            await resolveSyntax(record); await updateIndex(record);
+          }
+          openedDocuments.add(record.id);
           activeId = record.id; emitDocument(record);
           return document(record);
         });

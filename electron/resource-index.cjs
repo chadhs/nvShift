@@ -4,7 +4,7 @@ const indexes = new WeakMap();
 const analyzer = createAnalyzer();
 async function documentIndex(doc) {
   if (!indexes.has(doc)) {
-    const indexing = analyzer.analyze({ source: doc.source, format: doc.format ?? documentFormat(doc.path) });
+    const indexing = analyzer.analyze({ id: doc.id, revision: doc.revision, source: doc.source, format: doc.format ?? documentFormat(doc.path) }, { scope: doc });
     indexes.set(doc, indexing);
     // Cancellation must not poison this revision if the user returns to its tab.
     void indexing.catch(() => { if (indexes.get(doc) === indexing) indexes.delete(doc); });

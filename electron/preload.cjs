@@ -8,6 +8,8 @@ const subscribe = (channel) => (callback) => {
 };
 contextBridge.exposeInMainWorld('nvShift', {
   platform: process.platform,
+  invalidateBrowse: (groupId, generation, token) => ipcRenderer.send('workspace:invalidate-browse', groupId, generation, token),
+  workspace: invoke('workspace:command'), onRemoved: subscribe('note:removed'),
   rendererReady: invoke('app:ready'),
   beginShortcutRecording: invoke('shortcut:record-start'), endShortcutRecording: invoke('shortcut:record-end'),
   initial: invoke('app:initial'), chooseLibrary: invoke('library:choose'), search: invoke('library:search'),

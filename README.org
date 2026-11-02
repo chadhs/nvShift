@@ -87,9 +87,11 @@ search shows recently modified notes. Results show their relative folder when
 needed to distinguish names.
 
 Use Up and Down to highlight results and show each note while focus stays in
-search. Browsing keeps the current Editor, Split, or Preview view; Enter opens
-the highlighted note for editing and focuses its editor. Pending edits are
-saved before browsing another note. A separate Create result creates a note
+search. Browsing keeps the current Editor, Editor + preview, or Preview view.
+Enter opens the highlighted note in the selected tab and focuses that document.
+In the single-document layout it opens Preview notes for editing; two-document
+panes retain their selected Editor or Preview mode. Pending edits are saved
+before replacing a note. Escape cancels browsing and restores the original note. A separate Create result creates a note
 using the current query as its title. Highlighting Create does not create a file.
 =Cmd/Ctrl+Enter= creates directly. Choose the extension beside the search field. Filename
 validation and exclusive creation prevent replacing an existing note.
@@ -100,14 +102,82 @@ validation and exclusive creation prevent replacing an existing note.
 | Cmd/Ctrl+Enter | Create a note from the search text |
 | Cmd/Ctrl+F | Find in the current document |
 | Cmd/Ctrl+S | Save now |
-| Cmd/Ctrl+Shift+P | Cycle Editor, Split, and Preview |
-| Cmd/Ctrl+W | Save and hide the window |
-| Cmd/Ctrl+Shift+Space | Raise nvShift and focus search, configurable |
+| Cmd/Ctrl+T | New blank tab, then focus search |
+| Cmd/Ctrl+Shift+Enter | Open selected search result in a new tab, from search |
+| Cmd/Ctrl+W | Close the active tab after saving |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab in the focused pane |
+| Cmd/Ctrl+1 / Cmd/Ctrl+2 | Focus the left / right document pane |
+| Cmd/Ctrl+Backslash | Toggle the two-document layout |
+| Cmd/Ctrl+Shift+P | Cycle the focused pane's available view modes |
+| ? | Show keyboard shortcuts, outside editable controls |
+| Ctrl+Alt+Space | Raise nvShift and focus search, configurable |
+
+Click the lifebuoy immediately before the Settings gear to open Keyboard
+shortcuts. It is available at every window width and through More → Keyboard
+shortcuts. Press =?= while focus is outside text fields and the editor for the
+same reference. Question marks in notes, search, forms, Vim, and shortcut
+recording retain their normal behavior.
+
+The reference groups Search and notes, Tabs and panes, Editing and views, and
+Quick access. It uses your platform's keys, marks context-specific shortcuts,
+and shows your configured quick-access shortcut and its current availability.
+Escape or the close button returns focus and editor selection to where you
+were working.
 
 Rename a note in its current folder, reveal it in your file manager, or move it
 to the OS trash. Rename changes its filename only; links in other notes are not
 rewritten. If the OS trash operation fails, nvShift reports the error and keeps
 the note.
+
+* Document tabs and two documents
+Normal search and opening replace the selected tab in the last-focused document
+pane. Tabs accumulate only when you choose Open in new tab from a result's
+context menu, press Cmd/Ctrl+Shift+Enter in search, or start a blank tab with
+Cmd/Ctrl+T. Opening a new tab after arrow-key browsing preserves the original
+note. An already-open document selects its existing tab instead of opening a
+second copy.
+
+Tab labels use filenames. Full relative paths are available in their tooltips
+and overflow menu. Cursor, selection, scroll, folds, and Undo survive tab changes
+and moves between panes during a session. Closing a tab saves its changes and
+never deletes its file. A save failure or unresolved conflict keeps it open.
+Closing the final tab leaves an empty workspace with search available.
+
+Use the Two documents toolbar control or Cmd/Ctrl+Backslash to keep a working
+note on the left and choose a reference on the right. At desktop widths, the
+control includes a Two documents label while one document group is shown. The
+label disappears when two-document mode is active and returns when it is turned
+off. Compact windows keep the icon. Its tooltip includes the toggle shortcut;
+the empty reference pane also shows the pane-switching shortcuts. The new right pane focuses
+search and inherits the focused pane's Editor or Preview mode. Editor + preview
+becomes Editor in the two-document layout. Moving a tab into a newly created
+pane uses the same rule. Each pane can independently use Editor or Preview;
+clicking inside a pane makes subsequent searches target it. The other pane stays
+on its selected note. Opening another existing note or blank tab keeps its
+pane's chosen mode; newly created notes open in Editor. Tab menus provide Move
+to other pane. Returning to one document group merges both tab groups and
+preserves the focused document.
+
+The existing single-document Split view is now called Editor + preview. It shows
+one note's source and rendered content together. Two documents shows exactly two
+areas, each using Editor or Preview; it does not add nested source/preview splits.
+Returning to one document group restores the saved single-document view mode.
+
+Tabs and controls share the existing 64-pixel toolbar. A single tab in a single
+group hides the tab strip. More tabs scroll horizontally and remain accessible
+through ellipsis menus that appear only when tabs do not fit. An underline marks
+the active tab group; pane labels are available to assistive technology without
+visible L/R buttons. Right-click menus stay open after releasing the mouse, and
+close when you choose an action, press Escape, click outside, or switch apps.
+Two-document panes remain side by side at the minimum window width; compact
+controls and a temporary sidebar-width clamp preserve
+writing space without adding toolbar rows.
+
+Hiding and reopening nvShift preserves the workspace. Quitting and relaunching,
+or successfully switching notes folders, starts a fresh single group. Recovered
+dirty or conflicted drafts open as tabs so they remain visible. Cancelling the
+folder picker leaves the current workspace intact. Tab order, pane membership,
+and the document-divider position are not persisted between launches.
 
 * File extension and content syntax
 The default new-note extension is =.md=. Change it in Settings or choose another
@@ -121,8 +191,9 @@ extension when creating a note.
 
 Existing =.txt= files can mix Markdown, Org, and plain text in one folder.
 Automatic detection runs once when you open a note. Its format stays fixed while
-you type, save, undo, or receive external file changes. Switch to another note
-and back to detect its latest contents. Choosing Automatic after a manual
+you type, save, undo, or receive external file changes. Switching between open
+tabs or moving them between panes does not detect again. Close or replace the
+note and reopen it to detect its latest contents. Choosing Automatic after a manual
 override also detects once immediately. Detection recognizes Markdown headings, fenced blocks, links, and
 images, and Org directives, blocks, links, and multi-level headings. Literal
 code examples are ignored. Prose, ordinary lists, and a lone =* Heading= are
@@ -144,7 +215,7 @@ are detected from their contents. No files are rewritten or renamed, and no
 format metadata is inserted. Syntax changes preserve selection, undo, and Vim
 state and apply to preview, headings, list editing, and image insertion.
 
-Editor, Split, and Preview views share the current note. The editor starts in
+Editor, Editor + preview, and Preview views share the current note. The editor starts in
 source mode with wrapping, undo/redo, and document search. Preview follows
 unsaved edits. Markdown and Org use the same bounded rendering implementation as
 MarkupPreview; plain text displays literally.
@@ -163,7 +234,7 @@ its marker to end the list. This also works in Vim Insert mode and in =.txt=
 notes configured as Org; literal source and example blocks keep ordinary newlines.
 
 * Heading folding
-In Editor and Split views, press =Tab= on a Markdown or Org heading to open or
+In Editor and Editor + preview views, press =Tab= on a Markdown or Org heading to open or
 close its section. The gutter arrows use the same ranges. Markdown supports
 both =# ATX= and underlined Setext headings; Org supports star headings. Heading
 examples inside literal/code blocks do not create sections. Plain-text notes
@@ -185,7 +256,7 @@ controls. Search fields and dialogs retain normal Tab navigation.
 
 Use View → Folding → Toggle heading from a section's body, or Expand all to
 reveal the whole source. Closing a parent preserves folded child sections.
-Search reveals hidden matches. Folds survive note switches, Editor/Split view
+Search reveals hidden matches. Folds survive note switches, Editor/Editor + preview view
 changes, appearance changes, and Vim toggles during the session. Restart,
 external whole-document replacement, and syntax changes expand the source.
 Folding leaves file contents and text Undo history intact. The rendered preview
@@ -280,7 +351,8 @@ binding and preference. Verify a shortcut by pressing it while another app has
 focus: nvShift should appear with search focused. Opening nvShift again also
 raises its existing window.
 
-Closing the window keeps nvShift running. The menu-bar or tray icon provides
+Cmd/Ctrl+W closes the active document tab. File → Hide window or the native
+window close button hides nvShift and keeps it running. The menu-bar or tray icon provides
 Open, Settings, and Quit. Quit saves pending changes before exiting. Automatic
 startup at login is not included.
 

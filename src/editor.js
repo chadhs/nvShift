@@ -54,138 +54,143 @@ const editorTheme = EditorView.theme({
   '.cm-vim-panel': { backgroundColor: 'var(--chrome)', color: 'var(--ink)', padding: '5px 12px', fontFamily: 'monospace' },
 });
 
-/** Keep each note's CodeMirror state, including selection and undo history, across switches. */
-export function createNoteEditor(parent, { onChange, onSave, onImage, onImageFiles, onHistory = () => {}, onError = () => {} }) {
-  const language = new Compartment();
-  const vimMode = new Compartment();
-  const editable = new Compartment();
-  const states = new Map();
-  const stateFormats = new Map();
-  let currentId = null;
-  let format = 'plain';
-  let settings = { vimMode: false };
-  let applying = false;
+// Extensions route through the current view rather than the pane that created
+// a cached state. A document can move panes without losing history or commands.
+const editorContexts = new WeakMap();
+Vim.defineEx('write', 'w', (cm) => {
+  const owner = editorContexts.get(cm.cm6);
+  if (owner?.id()) owner.onSave(owner.id());
+});
+
+export function createNoteEditor(parent, {
+  onChange = () => {}, onSave = () => {}, onImage = () => {}, onImageFiles = () => {},
+  onHistory = () => {}, onError = () => {}, sessions = new Map(),
+}) {
+  let currentId = null, applying = false, settings = { vimMode: false };
   const languageExtension = (syntax) => [headingFolding(syntax), syntax === 'org'
     ? [orgLanguage, Prec.high(keymap.of([{ key: 'Enter', run: insertOrgListItem }]))]
     : syntax === 'markdown' ? markdown() : []];
-  const state = (source = '') => EditorState.create({ doc: source, extensions: [
-    Prec.highest(EditorView.domEventHandlers({ keydown: (event, target) => {
-      if (!editorTab(event, target)) return false;
-      if (settings.vimMode) {
-        const mode = getCM(target)?.state.vim, input = mode?.inputState;
-        if (!mode || mode.insertModeReturn || mode.visualMode || input?.operator || input?.keyBuffer?.length
-          || input?.prefixRepeat?.length || input?.motionRepeat?.length || input?.registerName) return false;
-        if (!mode.insertMode) {
-          if (!event.shiftKey) toggleHeading(target);
-          return true;
+  function state(source, format, session) {
+    return EditorState.create({ doc: source, extensions: [
+      Prec.highest(EditorView.domEventHandlers({ keydown: (event, target) => {
+        if (!editorTab(event, target)) return false;
+        const owner = editorContexts.get(target);
+        if (owner?.settings().vimMode) {
+          const mode = getCM(target)?.state.vim, input = mode?.inputState;
+          if (!mode || mode.insertModeReturn || mode.visualMode || input?.operator || input?.keyBuffer?.length
+            || input?.prefixRepeat?.length || input?.motionRepeat?.length || input?.registerName) return false;
+          if (!mode.insertMode) { if (!event.shiftKey) toggleHeading(target); return true; }
+        } else if (!event.shiftKey && toggleHeading(target)) return true;
+        (event.shiftKey ? indentLess : indentMore)(target); return true;
+      } })),
+      Prec.lowest(EditorView.domEventHandlers({ keydown: (event, target) => editorTab(event, target) })),
+      session.vimMode.of(settings.vimMode ? vim() : []), basicSetup,
+      session.language.of(languageExtension(format)),
+      EditorState.readOnly.of(false), EditorView.editable.of(true), EditorView.lineWrapping,
+      editorTheme, syntaxHighlighting(noteHighlight),
+      keymap.of([{ key: 'Mod-s', run: (target) => { const owner = editorContexts.get(target); owner?.onSave(owner.id()); return true; } }]),
+      EditorView.contentAttributes.of({ 'aria-label': 'Note contents', spellcheck: 'false' }),
+      EditorView.updateListener.of((update) => {
+        const owner = editorContexts.get(update.view), id = owner?.id();
+        if (!id) return;
+        const entry = sessions.get(id);
+        if (entry?.owner && entry.owner !== owner) return;
+        if (entry) entry.state = update.state;
+        if (update.docChanged && !owner.applying()) {
+          owner.onHistory(id, update.startState.doc.toString());
+          owner.onChange(update.state.doc.toString(), id);
         }
-      } else if (!event.shiftKey && toggleHeading(target)) {
-        return true;
-      }
-      (event.shiftKey ? indentLess : indentMore)(target);
-      return true;
-    } })),
-    // Vim gets first refusal in Visual mode and pending commands. CodeMirror
-    // bypasses all key handlers itself when explicit Tab-focus mode is active.
-    Prec.lowest(EditorView.domEventHandlers({ keydown: (event, target) => editorTab(event, target) })),
-    vimMode.of(settings.vimMode ? vim() : []),
-    basicSetup,
-    language.of(languageExtension(format)),
-    editable.of([EditorState.readOnly.of(false), EditorView.editable.of(true)]),
-    EditorView.lineWrapping,
-    editorTheme,
-    syntaxHighlighting(noteHighlight),
-    keymap.of([{ key: 'Mod-s', run: () => { onSave(); return true; } }]),
-    EditorView.contentAttributes.of({ 'aria-label': 'Note contents', spellcheck: 'false' }),
-    EditorView.updateListener.of((update) => {
-      if (currentId) { states.set(currentId, update.state); stateFormats.set(currentId, format); }
-      if (update.docChanged && !applying && currentId) {
-        onHistory(currentId, update.startState.doc.toString());
-        onChange(update.state.doc.toString());
-      }
-    }),
-    EditorView.domEventHandlers({
-      paste(event) {
-        const item = [...(event.clipboardData?.items ?? [])].find((entry) => entry.kind === 'file' && entry.type.startsWith('image/'));
-        if (!item || !currentId) return false;
-        const file = item.getAsFile();
-        if (!file) return false;
-        event.preventDefault();
-        const noteId = currentId;
-        void file.arrayBuffer().then((bytes) => onImage(new Uint8Array(bytes), file.name || 'clipboard.png', noteId)).catch(onError);
-        return true;
-      },
-      drop(event) {
-        const files = [...(event.dataTransfer?.files ?? [])];
-        if (!files.length || !currentId) return false;
-        event.preventDefault();
-        onImageFiles(files, currentId);
-        return true;
-      },
-    }),
-  ] });
-  const view = new EditorView({ state: state(), parent });
-  Vim.defineEx('write', 'w', () => { onSave(); });
-
-  function applySettings(next) {
-    const changed = Boolean(next.vimMode) !== Boolean(settings.vimMode);
-    settings = { ...settings, ...next };
-    if (changed) view.dispatch({ effects: vimMode.reconfigure(settings.vimMode ? vim() : []) });
+      }),
+      EditorView.domEventHandlers({
+        paste(event, target) {
+          const owner = editorContexts.get(target), id = owner?.id();
+          const item = [...(event.clipboardData?.items ?? [])].find((value) => value.kind === 'file' && value.type.startsWith('image/'));
+          if (!item || !id) return false;
+          const file = item.getAsFile(); if (!file) return false;
+          event.preventDefault();
+          const bookmark = owner.bookmark();
+          void file.arrayBuffer().then((bytes) => owner.onImage(new Uint8Array(bytes), file.name || 'clipboard.png', id, bookmark)).catch(owner.onError);
+          return true;
+        },
+        drop(event, target) {
+          const owner = editorContexts.get(target), id = owner?.id();
+          const files = [...(event.dataTransfer?.files ?? [])];
+          if (!files.length || !id) return false;
+          event.preventDefault(); owner.onImageFiles(files, id, owner.bookmark()); return true;
+        },
+      }),
+    ] });
+  }
+  const empty = { language: new Compartment(), vimMode: new Compartment() };
+  const view = new EditorView({ state: state('', 'plain', empty), parent });
+  function bookmark() { return { id: currentId, source: view.state.doc.toString(), selection: view.state.selection, focused: view.hasFocus }; }
+  const context = { id: () => currentId, settings: () => settings, applying: () => applying, bookmark, onChange, onSave, onImage, onImageFiles, onHistory, onError };
+  editorContexts.set(view, context);
+  function remember() {
+    if (!currentId) return;
+    const session = sessions.get(currentId);
+    if (session && (!session.owner || session.owner === context)) { session.state = view.state; session.scrollTop = view.scrollDOM.scrollTop; session.scrollLeft = view.scrollDOM.scrollLeft; if (session.owner === context) session.owner = null; }
+  }
+  function configure(session) {
+    view.dispatch({ effects: [session.language.reconfigure(languageExtension(session.format)), session.vimMode.reconfigure(settings.vimMode ? vim() : [])] });
   }
   function openDocument(doc) {
-    if (!doc) return;
+    if (!doc) return detach();
     applying = true;
     try {
       if (currentId !== doc.id) {
-        if (currentId) states.set(currentId, view.state);
-        currentId = doc.id;
-        format = doc.format;
-        const cached = states.get(doc.id);
-        const cachedFormat = stateFormats.get(doc.id);
-        view.setState(cached ?? state(doc.source));
-        if (cached && cachedFormat !== format) expandAllFolds(view);
-        view.dispatch({ effects: [language.reconfigure(languageExtension(format)), vimMode.reconfigure(settings.vimMode ? vim() : [])] });
+        remember(); currentId = doc.id;
+        let session = sessions.get(doc.id);
+        if (!session) {
+          session = { language: new Compartment(), vimMode: new Compartment(), format: doc.format, scrollTop: 0, scrollLeft: 0 };
+          session.state = state(doc.source, doc.format, session); sessions.set(doc.id, session);
+        }
+        session.owner = context;
+        const previousFormat = session.format; session.format = doc.format;
+        view.setState(session.state);
+        if (previousFormat !== doc.format) expandAllFolds(view);
+        configure(session);
+        view.scrollDOM.scrollTop = session.scrollTop || 0; view.scrollDOM.scrollLeft = session.scrollLeft || 0;
       }
-      if (format !== doc.format) {
-        expandAllFolds(view);
-        format = doc.format;
-        view.dispatch({ effects: language.reconfigure(languageExtension(format)) });
-      }
+      const session = sessions.get(doc.id);
+      if (session.format !== doc.format) { expandAllFolds(view); session.format = doc.format; configure(session); }
       if (view.state.doc.toString() !== doc.source) {
         expandAllFolds(view);
-        const anchor = Math.min(view.state.selection.main.anchor, doc.source.length);
-        const head = Math.min(view.state.selection.main.head, doc.source.length);
+        const anchor = Math.min(view.state.selection.main.anchor, doc.source.length), head = Math.min(view.state.selection.main.head, doc.source.length);
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: doc.source }, selection: { anchor, head }, annotations: Transaction.addToHistory.of(false) });
       }
-      states.set(doc.id, view.state);
-      stateFormats.set(doc.id, format);
+      session.state = view.state;
     } finally { applying = false; }
+  }
+  function detach() {
+    remember(); currentId = null;
+    applying = true; try { view.setState(state('', 'plain', empty)); } finally { applying = false; }
   }
   function focusEditor() {
     view.focus();
-    // macOS can clear the native range when an HTML dialog returns focus while
-    // CodeMirror still has its cached range. Restore through public DOM mapping
-    // so the next selectionchange cannot collapse the saved editor selection.
     const { anchor, head } = view.state.selection.main;
     const start = view.domAtPos(anchor), end = view.domAtPos(head);
     view.dom.ownerDocument.getSelection()?.setBaseAndExtent(start.node, start.offset, end.node, end.offset);
   }
   return {
-    view,
-    openDocument,
-    selectionBookmark: () => ({ id: currentId, source: view.state.doc.toString(), selection: view.state.selection, focused: view.hasFocus }),
-    restoreSelection(bookmark) {
-      if (!bookmark || bookmark.id !== currentId || bookmark.source !== view.state.doc.toString()) return;
-      view.dispatch({ selection: bookmark.selection, annotations: Transaction.addToHistory.of(false) });
-      if (bookmark.focused) focusEditor();
+    view, openDocument, detach,
+    selectionBookmark: bookmark,
+    restoreSelection(saved) {
+      if (!saved || saved.id !== currentId || saved.source !== view.state.doc.toString()) return false;
+      view.dispatch({ selection: saved.selection, annotations: Transaction.addToHistory.of(false) });
+      if (saved.focused) focusEditor(); return true;
     },
-    updateSettings: applySettings,
-    toggleHeading: () => toggleHeading(view, { containing: true }),
-    expandFolds: () => expandAllFolds(view),
-    source: () => view.state.doc.toString(),
-    focus: focusEditor,
+    updateSettings(next) {
+      const changed = Boolean(next.vimMode) !== Boolean(settings.vimMode); settings = { ...settings, ...next };
+      if (changed && currentId) view.dispatch({ effects: sessions.get(currentId).vimMode.reconfigure(settings.vimMode ? vim() : []) });
+    },
+    toggleHeading: () => toggleHeading(view, { containing: true }), expandFolds: () => expandAllFolds(view),
+    source: () => view.state.doc.toString(), focus: focusEditor,
     find: () => { openSearchPanel(view); view.dom.querySelector('.cm-search input')?.focus(); },
-    insert: (text) => { view.dispatch(view.state.replaceSelection(text), { scrollIntoView: true }); view.focus(); },
-    destroy: () => { view.destroy(); states.clear(); stateFormats.clear(); },
+    insert(text, saved) {
+      if (saved && !this.restoreSelection({ ...saved, focused: false })) throw new Error('The insertion location changed. Paste the image again.');
+      view.dispatch({ ...view.state.replaceSelection(text), scrollIntoView: true }); view.focus();
+    },
+    destroy: () => { remember(); editorContexts.delete(view); view.destroy(); },
   };
 }

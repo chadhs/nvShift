@@ -1,5 +1,41 @@
 #+title: nvShift releases
 
+* v0.5.0: document tabs, two-document layout, and shortcut help
+Open document tabs explicitly while ordinary search continues replacing the
+selected note. New-tab opening preserves the original note after arrow browsing.
+Cmd/Ctrl+W now closes the active tab; the native window close button and File →
+Hide window keep the application running with its workspace intact.
+
+Two documents keeps a working note and reference side by side. Each pane chooses
+Editor or Preview independently, with separate Find, scroll, and rendering state.
+A new pane inherits the focused pane's mode; Editor + preview falls back to
+Editor. Later opens keep the target pane's mode, and newly created notes start
+in Editor. Right-click menus remain open after mouse release. Tab groups use an
+active underline without visible L/R labels; ellipsis menus appear only when
+tabs overflow.
+
+The existing Split view is renamed Editor + preview and remains available for a
+single document. Tabs, overflow menus, and layout controls occupy the existing
+64-pixel toolbar without adding rows or pushing document content downward.
+
+A lifebuoy beside Settings opens a platform-specific keyboard-shortcut reference,
+also available through More or =?= outside editable controls. Question marks in
+notes, search, forms, Vim, and shortcut recording keep their normal behavior.
+The reference includes the configured global shortcut and restores focus when
+closed. The Two documents label appears in the desktop toolbar before activation
+and yields space to tabs while two-document mode is active; compact windows keep
+the icon, and the empty reference pane explains the pane-switching shortcuts.
+
+Tabs preserve cursor, folds, and Undo through switches and moves. Automatic .txt
+syntax is fixed for an open document's lifetime, including across focus changes.
+Closing/replacing and reopening detects again. Closing a tab saves safely and
+never deletes the note; unresolved save errors and conflicts keep it available.
+
+A full restart or notes-folder change starts fresh. Recovery drafts still open
+as tabs when needed, and hiding the window or recovering the renderer preserves
+the current workspace. Same-document dual views and persistent layout restoration
+are not included in this version.
+
 * v0.4.0: stable syntax and quick access
 Asset cleanup is available from Settings → Notes folder as well as the File menu.
 Automatic .txt syntax detection runs when opening a note and stays stable while
